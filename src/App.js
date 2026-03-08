@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./styles.css";
-import nutriCloudLogo from "./assets/nutri-cloud-logo.svg";
 import Login from "./pages/Login";
 import DashboardClient from "./pages/client/DashboardClient";
 import BlogClient from "./pages/client/BlogClient";
@@ -513,9 +512,11 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div>
-          <img src={nutriCloudLogo} alt="Nutri Cloud" className="brand-logo" />
-          <h1>{headerTitle}</h1>
+        <div className="brand-inline">
+          <img src="/favicon.svg" alt="Nutri Cloud" className="brand-leaf-logo" />
+          <div>
+            <h1>{headerTitle}</h1>
+          </div>
           <p className="brand-tagline">Coaching nutrition intelligent et humain</p>
         </div>
 

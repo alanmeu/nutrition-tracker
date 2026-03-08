@@ -115,6 +115,19 @@ h4 {
   filter: none;
 }
 
+.brand-inline {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.brand-leaf-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
 h1,
 h2,
 h3 {
