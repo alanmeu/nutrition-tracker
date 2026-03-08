@@ -1,0 +1,46 @@
+<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E6F4EE"/>
+      <stop offset="1" stop-color="#FFF5E8"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#26A17B"/>
+      <stop offset="1" stop-color="#1A7A63"/>
+    </linearGradient>
+    <linearGradient id="fruit" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FF9F6D"/>
+      <stop offset="1" stop-color="#F36A3D"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+
+  <circle cx="1370" cy="180" r="150" fill="#D9EFE5" opacity="0.8"/>
+  <circle cx="240" cy="840" r="220" fill="#FFE7CF" opacity="0.85"/>
+  <circle cx="840" cy="140" r="90" fill="#D1EBDD" opacity="0.8"/>
+
+  <g opacity="0.95">
+    <ellipse cx="340" cy="270" rx="150" ry="95" fill="url(#fruit)"/>
+    <path d="M330 175C350 140 390 134 420 154" stroke="#2C7A69" stroke-width="16" stroke-linecap="round"/>
+    <circle cx="290" cy="245" r="9" fill="#FFF3EC"/>
+    <circle cx="375" cy="290" r="12" fill="#FFF3EC"/>
+  </g>
+
+  <g>
+    <ellipse cx="1240" cy="740" rx="170" ry="110" fill="#EAF8F0"/>
+    <ellipse cx="1240" cy="740" rx="130" ry="78" fill="#FFFFFF"/>
+    <path d="M1130 760C1180 700 1300 700 1350 760" stroke="#BFD7CB" stroke-width="10" stroke-linecap="round"/>
+  </g>
+
+  <g transform="translate(880 410)">
+    <path d="M0 120C0 53.7 53.7 0 120 0H148C81.7 0 28 53.7 28 120V190H0V120Z" fill="url(#leaf)"/>
+    <path d="M210 160C210 93.7 156.3 40 90 40H62C128.3 40 182 93.7 182 160V230H210V160Z" fill="#2C8F73"/>
+  </g>
+
+  <g opacity="0.55" stroke="#7FB8A3" stroke-width="4">
+    <path d="M90 120C230 190 300 70 420 150"/>
+    <path d="M1180 120C1300 180 1420 120 1520 210"/>
+    <path d="M980 900C1120 820 1260 880 1420 790"/>
+  </g>
+</svg>
