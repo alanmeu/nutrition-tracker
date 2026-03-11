@@ -7,6 +7,7 @@ export default function ProfilClient({ user, onUpdateUser }) {
   const [height, setHeight] = useState(user.height || "");
   const [weight, setWeight] = useState(user.weight || "");
   const [goal, setGoal] = useState(user.goal || "");
+  const [status, setStatus] = useState("");
 
   useEffect(() => {
     const storedUser = JSON.parse(localStorage.getItem("userData"));
@@ -23,12 +24,13 @@ export default function ProfilClient({ user, onUpdateUser }) {
     const updatedUser = { name, age, height, weight, goal, history: user.history || [], pdfs: user.pdfs || [] };
     localStorage.setItem("userData", JSON.stringify(updatedUser));
     onUpdateUser(updatedUser);
-    alert("Profil sauvegardé !");
+    setStatus("Profil sauvegarde.");
   };
 
   return (
     <div className="container">
       <h2>Mon Profil</h2>
+      {status ? <p className="info-text">{status}</p> : null}
       <div className="card">
         <input type="text" placeholder="Nom" value={name} onChange={e => setName(e.target.value)} />
         <input type="number" placeholder="Âge" value={age} onChange={e => setAge(e.target.value)} />

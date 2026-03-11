@@ -19,6 +19,31 @@ export default function MenuClient({ weeklyMenus }) {
   }, [weeklyMenus, selectedMenuId]);
 
   const totalMenus = Array.isArray(weeklyMenus) ? weeklyMenus.length : 0;
+  const downloadMenu = () => {
+    if (!selectedMenu) return;
+    const lines = [`Menu hebdomadaire - Semaine du ${selectedMenu.weekStart}`, ""];
+    if (selectedMenu.notes) {
+      lines.push(`Note coach: ${selectedMenu.notes}`, "");
+    }
+    for (const day of DAY_KEYS) {
+      const meals = selectedMenu.plan?.[day.key] || {};
+      lines.push(day.label);
+      lines.push(`- Petit-dejeuner: ${meals.breakfast || "-"}`);
+      lines.push(`- Dejeuner: ${meals.lunch || "-"}`);
+      lines.push(`- Diner: ${meals.dinner || "-"}`);
+      lines.push(`- Collation: ${meals.snack || "-"}`);
+      lines.push("");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `menu-${selectedMenu.weekStart}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <section className="dashboard-grid menu-page">
@@ -48,6 +73,11 @@ export default function MenuClient({ weeklyMenus }) {
           <span className="menu-pill">{totalMenus} semaine{totalMenus > 1 ? "s" : ""} disponible{totalMenus > 1 ? "s" : ""}</span>
           {selectedMenu?.weekStart ? (
             <span className="menu-pill">Semaine active: {selectedMenu.weekStart}</span>
+          ) : null}
+          {selectedMenu ? (
+            <button className="ghost" type="button" onClick={downloadMenu}>
+              Telecharger le menu
+            </button>
           ) : null}
         </div>
       </section>

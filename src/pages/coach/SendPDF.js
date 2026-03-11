@@ -3,6 +3,7 @@ import { generatePDF } from "../../utils/pdf";
 
 export default function SendPDF({ client, onUpdateClient }) {
   const [message, setMessage] = useState("");
+  const [status, setStatus] = useState("");
 
   const handleSend = async () => {
     // Générer un PDF simple avec le message du coach
@@ -13,12 +14,13 @@ export default function SendPDF({ client, onUpdateClient }) {
     const updatedClient = { ...client, pdfs: [...(client.pdfs || []), { message, date: new Date().toLocaleDateString() }] };
     onUpdateClient(updatedClient);
     setMessage("");
-    alert("PDF envoyé !");
+    setStatus("PDF envoye.");
   };
 
   return (
     <div style={{ marginTop: 20 }}>
       <h4>Envoyer un PDF au client</h4>
+      {status ? <p style={{ color: "#236d7d", margin: "0 0 8px" }}>{status}</p> : null}
       <textarea
         value={message}
         onChange={(e) => setMessage(e.target.value)}

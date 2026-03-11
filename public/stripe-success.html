@@ -42,8 +42,17 @@
     <main class="card">
       <img class="logo" src="/favicon.svg" alt="Nutri Cloud" />
       <h1>Paiement confirme</h1>
-      <p>Ton abonnement est actif. Tu peux revenir dans l’application Nutri Cloud.</p>
+      <p>Ton abonnement est actif. Redirection vers ton suivi...</p>
     </main>
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get("checkout")) params.set("checkout", "success");
+        if (!params.get("source")) params.set("source", "subscription");
+        if (!params.get("target")) params.set("target", "suivi");
+        const target = "/" + (params.toString() ? "?" + params.toString() : "");
+        window.location.replace(target);
+      })();
+    </script>
   </body>
 </html>
-

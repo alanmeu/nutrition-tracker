@@ -1,4 +1,4 @@
-import logoUrl from "../assets/nutri-cloud-logo.svg";
+import logoUrl from "../assets/brand-mark-v3.svg";
 
 let logoPngDataUrlPromise = null;
 
@@ -29,7 +29,13 @@ async function getLogoPngDataUrl() {
 export async function addPdfBranding(doc) {
   try {
     const image = await getLogoPngDataUrl();
-    doc.addImage(image, "PNG", 14, 8, 86, 24);
+    doc.addImage(image, "PNG", 14, 8, 20, 20);
+    doc.setFontSize(18);
+    doc.setTextColor(30, 62, 48);
+    doc.text("Nutri Cloud", 39, 17);
+    doc.setFontSize(10);
+    doc.setTextColor(103, 123, 109);
+    doc.text("Bilan nutritionnel", 39, 24);
   } catch {
     doc.setFontSize(16);
     doc.setTextColor(15, 33, 54);
@@ -40,7 +46,7 @@ export async function addPdfBranding(doc) {
   }
 
   doc.setDrawColor(219, 230, 240);
-  doc.line(14, 36, 196, 36);
+  doc.line(14, 34, 196, 34);
   doc.setTextColor(20, 20, 20);
-  return 44;
+  return 42;
 }

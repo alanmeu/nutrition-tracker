@@ -15,6 +15,7 @@ import {
   createStripeCheckout,
   createStripePortal,
   createClientReport,
+  deleteChatHistory,
   deleteBlogPost,
   deleteClientPhoto,
   deleteNotification,
@@ -28,8 +29,11 @@ import {
   saveWeeklyGoals,
   saveWeeklyCheckin,
   saveWeeklyMenu,
+  sendChatMessage,
   signOut,
+  syncStripeSubscription,
   subscribeRealtimeForProfile,
+  markChatMessagesRead,
   updateAppointmentByCoach,
   uploadClientPhoto,
   uploadBlogCover,
@@ -59,14 +63,21 @@ export default function App() {
   const [notifications, setNotifications] = useState([]);
   const [subscription, setSubscription] = useState(null);
   const [blogPosts, setBlogPosts] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [clientPage, setClientPage] = useState("suivi");
+  const [coachPage, setCoachPage] = useState("clients");
+  const [processingSubscriptionReturn, setProcessingSubscriptionReturn] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [iosInstallOpen, setIosInstallOpen] = useState(false);
   const realtimeRefreshTimeoutRef = useRef(null);
+  const silentRefreshInFlightRef = useRef(false);
+  const silentRefreshQueuedRef = useRef(false);
+  const lastRealtimeRefreshAtRef = useRef(0);
   const snapshotsInitRef = useRef(false);
   const sessionRef = useRef(null);
+  const checkoutSyncRef = useRef("");
   const { canInstallPrompt, needsIosManualInstall, installLabel, promptInstall } = usePwaInstall();
 
   const hydrate = useCallback(async (nextSession, options = {}) => {
@@ -88,8 +99,10 @@ export default function App() {
       setNotifications([]);
       setSubscription(null);
       setBlogPosts([]);
+      setChatMessages([]);
       setLoading(false);
       setClientPage("suivi");
+      setCoachPage("clients");
       return;
     }
 
@@ -120,6 +133,7 @@ export default function App() {
       setNotifications(data.notifications || []);
       setSubscription(data.subscription || null);
       setBlogPosts(data.blogPosts || []);
+      setChatMessages(data.chatMessages || []);
     } catch (err) {
       setError(err.message || "Erreur de chargement des donnees.");
     } finally {
@@ -179,7 +193,19 @@ export default function App() {
 
   const refreshSilent = useCallback(async () => {
     if (!session) return;
-    await hydrate(session, { silent: true });
+    if (silentRefreshInFlightRef.current) {
+      silentRefreshQueuedRef.current = true;
+      return;
+    }
+    silentRefreshInFlightRef.current = true;
+    try {
+      do {
+        silentRefreshQueuedRef.current = false;
+        await hydrate(session, { silent: true });
+      } while (silentRefreshQueuedRef.current);
+    } finally {
+      silentRefreshInFlightRef.current = false;
+    }
   }, [hydrate, session]);
 
   useEffect(() => {
@@ -196,6 +222,7 @@ export default function App() {
 
       realtimeRefreshTimeoutRef.current = setTimeout(() => {
         realtimeRefreshTimeoutRef.current = null;
+        lastRealtimeRefreshAtRef.current = Date.now();
         refreshSilent();
       }, 350);
     };
@@ -228,7 +255,7 @@ export default function App() {
 
     await withBusy(async () => {
       await updateMyProfile(profile.id, updates);
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -237,14 +264,14 @@ export default function App() {
 
     await withBusy(async () => {
       await addWeightEntry(profile.id, entry);
-      await refresh();
+      refreshSilent();
     });
   };
 
   const handleUpdateClientPlan = async (clientId, updates) => {
     await withBusy(async () => {
       await updateClientPlan(clientId, updates);
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -259,14 +286,14 @@ export default function App() {
         message,
         bilan
       });
-      await refresh();
+      refreshSilent();
     });
   };
 
   const handleArchiveClient = async (clientId) => {
     await withBusy(async () => {
       await archiveAndDeleteClient(clientId);
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -281,7 +308,7 @@ export default function App() {
         notes,
         plan
       });
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -293,7 +320,7 @@ export default function App() {
         file,
         caption
       });
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -304,7 +331,7 @@ export default function App() {
         clientId: profile.id,
         ...payload
       });
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -317,7 +344,7 @@ export default function App() {
         weekStart,
         goals
       });
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -329,14 +356,14 @@ export default function App() {
         weekStart,
         goals
       });
-      await refresh();
+      refreshSilent();
     });
   };
 
   const handleRestoreArchivedClient = async (archiveId) => {
     await withBusy(async () => {
       await restoreArchivedClient(archiveId);
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -347,21 +374,21 @@ export default function App() {
         clientId: profile.id,
         ...payload
       });
-      await refresh();
+      refreshSilent();
     });
   };
 
   const handleUpdateAppointmentByCoach = async (payload) => {
     await withBusy(async () => {
       await updateAppointmentByCoach(payload);
-      await refresh();
+      refreshSilent();
     });
   };
 
   const handleCancelAppointment = async (appointmentId) => {
     await withBusy(async () => {
       await cancelAppointment({ appointmentId });
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -395,11 +422,75 @@ export default function App() {
     });
   };
 
+  const handleSendChatMessage = async ({ clientId, message }) => {
+    try {
+      setError("");
+      const text = String(message || "").trim();
+      if (!text) return;
+
+      const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const optimistic = {
+        id: tempId,
+        clientId,
+        coachId: isOwnerCoachProfile(profile) ? profile.id : "",
+        senderId: profile?.id || "",
+        message: text,
+        readAt: null,
+        createdAt: new Date().toISOString()
+      };
+      setChatMessages((prev) => [...(Array.isArray(prev) ? prev : []), optimistic]);
+
+      const saved = await sendChatMessage({ clientId, message: text });
+      if (saved?.id) {
+        setChatMessages((prev) => {
+          const list = Array.isArray(prev) ? prev : [];
+          const withoutTemp = list.filter((item) => item.id !== tempId);
+          if (withoutTemp.some((item) => item.id === saved.id)) return withoutTemp;
+          return [...withoutTemp, saved];
+        });
+      }
+      refreshSilent();
+    } catch (err) {
+      setChatMessages((prev) =>
+        (Array.isArray(prev) ? prev : []).filter((item) => !String(item.id || "").startsWith("tmp-"))
+      );
+      setError(err.message || "Impossible d'envoyer le message.");
+      throw err;
+    }
+  };
+
+  const handleMarkChatRead = async (clientId) => {
+    try {
+      setError("");
+      const nowIso = new Date().toISOString();
+      setChatMessages((prev) =>
+        (Array.isArray(prev) ? prev : []).map((item) =>
+          item.clientId === clientId && !item.readAt && item.senderId !== profile?.id
+            ? { ...item, readAt: nowIso }
+            : item
+        )
+      );
+      await markChatMessagesRead({ clientId });
+      refreshSilent();
+    } catch (err) {
+      setError(err.message || "Impossible de marquer les messages comme lus.");
+      throw err;
+    }
+  };
+
+  const handleDeleteChatHistory = async (clientId) => {
+    await withBusy(async () => {
+      await deleteChatHistory({ clientId });
+      setChatMessages((prev) => (Array.isArray(prev) ? prev.filter((item) => item.clientId !== clientId) : []));
+      refreshSilent();
+    });
+  };
+
   const handleSaveBlogPost = async (payload) => {
     let saved = null;
     await withBusy(async () => {
       saved = await saveBlogPost(payload);
-      await refresh();
+      refreshSilent();
     });
     return saved;
   };
@@ -407,7 +498,7 @@ export default function App() {
   const handleDeleteBlogPost = async (postId) => {
     await withBusy(async () => {
       await deleteBlogPost(postId);
-      await refresh();
+      refreshSilent();
     });
   };
 
@@ -457,10 +548,74 @@ export default function App() {
   }, [profile]);
 
   useEffect(() => {
+    if (!profile || isOwnerCoachProfile(profile)) return;
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get("checkout");
+    const source = params.get("source");
+    if (checkout !== "success" || source !== "subscription") return;
+
+    const syncKey = `${checkout}:${source}:${params.get("session_id") || ""}`;
+    if (checkoutSyncRef.current === syncKey) return;
+    checkoutSyncRef.current = syncKey;
+
+    let cancelled = false;
+    setProcessingSubscriptionReturn(true);
+    setClientPage("suivi");
+    const url = new URL(window.location.href);
+    ["checkout", "source", "target", "session_id"].forEach((key) => {
+      url.searchParams.delete(key);
+    });
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+
+    (async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await syncStripeSubscription();
+          await refreshSilent();
+          break;
+        } catch (err) {
+          if (attempt === 2 || cancelled) break;
+          await new Promise((resolve) => setTimeout(resolve, 900 * (attempt + 1)));
+        }
+      }
+      if (!cancelled) {
+        setProcessingSubscriptionReturn(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      setProcessingSubscriptionReturn(false);
+    };
+  }, [profile, refreshSilent]);
+
+  useEffect(() => {
     if (!profile || isOwnerCoachProfile(profile)) {
       setClientPage("suivi");
     }
   }, [profile]);
+
+  useEffect(() => {
+    if (!profile || !isOwnerCoachProfile(profile)) {
+      setCoachPage("clients");
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    if (!profile) return undefined;
+    const isMessagingView =
+      (isOwnerCoachProfile(profile) && coachPage === "messages") ||
+      (!isOwnerCoachProfile(profile) && clientPage === "messagerie");
+    if (!isMessagingView) return undefined;
+
+    const intervalId = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (Date.now() - lastRealtimeRefreshAtRef.current < 2500) return;
+      refreshSilent();
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [profile, coachPage, clientPage, refreshSilent]);
 
   if (!hasSupabaseConfig) {
     return (
@@ -496,6 +651,16 @@ export default function App() {
   );
 
   if (!isOwnerCoachProfile(profile) && !hasActiveSubscription) {
+    if (processingSubscriptionReturn) {
+      return (
+        <main className="setup-screen">
+          <section className="setup-card">
+            <h1>Activation de ton abonnement...</h1>
+            <p>Un instant, on finalise ton acces puis on t'envoie sur ton suivi.</p>
+          </section>
+        </main>
+      );
+    }
     return (
       <SubscriptionGate
         user={profile}
@@ -513,23 +678,23 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand-inline">
-          <img src="/favicon.svg" alt="Nutri Cloud" className="brand-leaf-logo" />
+          <img src="/brand-mark-v3.svg?v=20260311d" alt="Nutri Cloud" className="brand-logo" />
           <div>
             <h1>{headerTitle}</h1>
           </div>
-          <p className="brand-tagline">Coaching nutrition intelligent et humain</p>
+          <p className="brand-tagline">Nutrition claire, humaine et haut de gamme</p>
         </div>
 
         <div className="header-actions">
           {!isOwnerCoachProfile(profile) ? (
             <div className="client-nav">
               <button
-                className={clientPage === "suivi" ? "primary" : "ghost"}
+                className={clientPage === "messagerie" ? "primary" : "ghost"}
                 type="button"
                 disabled={busy}
-                onClick={() => setClientPage("suivi")}
+                onClick={() => setClientPage("messagerie")}
               >
-                Suivi
+                Messagerie
               </button>
               <button
                 className={clientPage === "menu" ? "primary" : "ghost"}
@@ -537,7 +702,23 @@ export default function App() {
                 disabled={busy}
                 onClick={() => setClientPage("menu")}
               >
-                Menu hebdo
+                Menu
+              </button>
+              <button
+                className={clientPage === "suivi" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setClientPage("suivi")}
+              >
+                Mon suivi
+              </button>
+              <button
+                className={clientPage === "rdv" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setClientPage("rdv")}
+              >
+                RDV
               </button>
               <button
                 className={clientPage === "blog" ? "primary" : "ghost"}
@@ -545,10 +726,69 @@ export default function App() {
                 disabled={busy}
                 onClick={() => setClientPage("blog")}
               >
-                Blog & Astuces
+                Blog
+              </button>
+              <button
+                className={clientPage === "autre" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setClientPage("autre")}
+              >
+                Autre
               </button>
             </div>
-          ) : null}
+          ) : (
+            <div className="client-nav">
+              <button
+                className={coachPage === "clients" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setCoachPage("clients")}
+              >
+                Clients
+              </button>
+              <button
+                className={coachPage === "menus" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setCoachPage("menus")}
+              >
+                Menus
+              </button>
+              <button
+                className={coachPage === "appointments" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setCoachPage("appointments")}
+              >
+                RDV
+              </button>
+              <button
+                className={coachPage === "messages" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setCoachPage("messages")}
+              >
+                Messagerie
+              </button>
+              <button
+                className={coachPage === "blog" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setCoachPage("blog")}
+              >
+                Blog
+              </button>
+              <button
+                className={coachPage === "archives" ? "primary" : "ghost"}
+                type="button"
+                disabled={busy}
+                onClick={() => setCoachPage("archives")}
+              >
+                Archives
+              </button>
+            </div>
+          )}
           {(canInstallPrompt || needsIosManualInstall) ? (
             <button
               className="ghost"
@@ -575,7 +815,7 @@ export default function App() {
         </div>
       ) : null}
 
-      <main className={`container ${!isOwnerCoachProfile(profile) && (clientPage === "menu" || clientPage === "blog") ? "container-wide" : ""}`}>
+      <main className={`container ${((!isOwnerCoachProfile(profile) && (clientPage === "menu" || clientPage === "blog")) || (isOwnerCoachProfile(profile) && (coachPage === "menus" || coachPage === "blog"))) ? "container-wide" : ""}`}>
         {error ? <p className="error-banner">{error}</p> : null}
 
         {isOwnerCoachProfile(profile) ? (
@@ -600,12 +840,108 @@ export default function App() {
             onSaveBlogPost={handleSaveBlogPost}
             onDeleteBlogPost={handleDeleteBlogPost}
             onUploadBlogCover={handleUploadBlogCover}
+            chatMessages={chatMessages}
+            onSendChatMessage={handleSendChatMessage}
+            onMarkChatRead={handleMarkChatRead}
+            onDeleteChatHistory={handleDeleteChatHistory}
+            forcedView={coachPage}
+            onChangeView={setCoachPage}
           />
         ) : (
-          clientPage === "blog" ? (
-            <BlogClient posts={blogPosts} />
+          clientPage === "messagerie" ? (
+            <DashboardClient
+              user={profile}
+              subscription={subscription}
+              history={history}
+              reports={reports}
+              clientPhotos={clientPhotos}
+              weeklyCheckins={weeklyCheckins}
+              weeklyGoals={weeklyGoals}
+              notifications={notifications}
+              busy={busy}
+              onSaveProfile={handleSaveProfile}
+              onAddWeight={handleAddWeight}
+              onUploadPhoto={handleUploadClientPhoto}
+              onSaveWeeklyCheckin={handleSaveWeeklyCheckin}
+              onUpdateWeeklyGoalsProgress={handleUpdateWeeklyGoalsProgress}
+              onMarkNotificationRead={handleMarkNotificationRead}
+              onDeleteNotification={handleDeleteNotification}
+              onDeletePhoto={handleDeletePhoto}
+              appointments={appointments}
+              busyAppointmentSlots={busyAppointmentSlots}
+              onBookAppointment={handleBookAppointment}
+              onCancelAppointment={handleCancelAppointment}
+              onManageSubscription={handleManageSubscription}
+              chatMessages={chatMessages}
+              onSendChatMessage={handleSendChatMessage}
+              onMarkChatRead={handleMarkChatRead}
+              onDeleteChatHistory={handleDeleteChatHistory}
+              visibleSections={["messages", "photos", "reports"]}
+            />
           ) : clientPage === "menu" ? (
             <MenuClient weeklyMenus={weeklyMenus} />
+          ) : clientPage === "rdv" ? (
+            <DashboardClient
+              user={profile}
+              subscription={subscription}
+              history={history}
+              reports={reports}
+              clientPhotos={clientPhotos}
+              weeklyCheckins={weeklyCheckins}
+              weeklyGoals={weeklyGoals}
+              notifications={notifications}
+              busy={busy}
+              onSaveProfile={handleSaveProfile}
+              onAddWeight={handleAddWeight}
+              onUploadPhoto={handleUploadClientPhoto}
+              onSaveWeeklyCheckin={handleSaveWeeklyCheckin}
+              onUpdateWeeklyGoalsProgress={handleUpdateWeeklyGoalsProgress}
+              onMarkNotificationRead={handleMarkNotificationRead}
+              onDeleteNotification={handleDeleteNotification}
+              onDeletePhoto={handleDeletePhoto}
+              appointments={appointments}
+              busyAppointmentSlots={busyAppointmentSlots}
+              onBookAppointment={handleBookAppointment}
+              onCancelAppointment={handleCancelAppointment}
+              onManageSubscription={handleManageSubscription}
+              chatMessages={chatMessages}
+              onSendChatMessage={handleSendChatMessage}
+              onMarkChatRead={handleMarkChatRead}
+              onDeleteChatHistory={handleDeleteChatHistory}
+              visibleSections={["appointments"]}
+            />
+          ) : clientPage === "blog" ? (
+            <BlogClient posts={blogPosts} />
+          ) : clientPage === "autre" ? (
+            <DashboardClient
+              user={profile}
+              subscription={subscription}
+              history={history}
+              reports={reports}
+              clientPhotos={clientPhotos}
+              weeklyCheckins={weeklyCheckins}
+              weeklyGoals={weeklyGoals}
+              notifications={notifications}
+              busy={busy}
+              onSaveProfile={handleSaveProfile}
+              onAddWeight={handleAddWeight}
+              onUploadPhoto={handleUploadClientPhoto}
+              onSaveWeeklyCheckin={handleSaveWeeklyCheckin}
+              onUpdateWeeklyGoalsProgress={handleUpdateWeeklyGoalsProgress}
+              onMarkNotificationRead={handleMarkNotificationRead}
+              onDeleteNotification={handleDeleteNotification}
+              onDeletePhoto={handleDeletePhoto}
+              appointments={appointments}
+              busyAppointmentSlots={busyAppointmentSlots}
+              onBookAppointment={handleBookAppointment}
+              onCancelAppointment={handleCancelAppointment}
+              onManageSubscription={handleManageSubscription}
+              chatMessages={chatMessages}
+              onSendChatMessage={handleSendChatMessage}
+              onMarkChatRead={handleMarkChatRead}
+              onDeleteChatHistory={handleDeleteChatHistory}
+              visibleSections={["notifications", "billing", "goals"]}
+            />
           ) : (
             <DashboardClient
               user={profile}
@@ -630,6 +966,11 @@ export default function App() {
               onBookAppointment={handleBookAppointment}
               onCancelAppointment={handleCancelAppointment}
               onManageSubscription={handleManageSubscription}
+              chatMessages={chatMessages}
+              onSendChatMessage={handleSendChatMessage}
+              onMarkChatRead={handleMarkChatRead}
+              onDeleteChatHistory={handleDeleteChatHistory}
+              visibleSections={["profile", "weight", "reports", "checkins", "appointments"]}
             />
           )
         )}

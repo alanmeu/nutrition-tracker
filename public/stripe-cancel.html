@@ -42,8 +42,16 @@
     <main class="card">
       <img class="logo" src="/favicon.svg" alt="Nutri Cloud" />
       <h1>Paiement annule</h1>
-      <p>Aucun debit n’a ete effectue. Tu peux revenir dans l’application et reessayer.</p>
+      <p>Aucun debit n’a ete effectue. Redirection vers l'application...</p>
     </main>
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get("checkout")) params.set("checkout", "cancel");
+        if (!params.get("source")) params.set("source", "subscription");
+        const target = "/" + (params.toString() ? "?" + params.toString() : "");
+        window.location.replace(target);
+      })();
+    </script>
   </body>
 </html>
-

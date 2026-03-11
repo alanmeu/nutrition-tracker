@@ -9,6 +9,11 @@ create table if not exists public.profiles (
   sex text not null default 'male' check (sex in ('male', 'female')),
   height numeric not null default 170,
   weight numeric not null default 70,
+  waist_cm numeric,
+  hip_cm numeric,
+  chest_cm numeric,
+  arm_cm numeric,
+  thigh_cm numeric,
   goal text not null default '',
   nap numeric not null default 1.4,
   bmr_method text not null default 'mifflin',
@@ -20,6 +25,16 @@ create table if not exists public.profiles (
 
 alter table public.profiles
   add column if not exists bmr_method text not null default 'mifflin';
+alter table public.profiles
+  add column if not exists waist_cm numeric;
+alter table public.profiles
+  add column if not exists hip_cm numeric;
+alter table public.profiles
+  add column if not exists chest_cm numeric;
+alter table public.profiles
+  add column if not exists arm_cm numeric;
+alter table public.profiles
+  add column if not exists thigh_cm numeric;
 
 create table if not exists public.weights (
   id uuid primary key default gen_random_uuid(),
@@ -184,6 +199,22 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  coach_id uuid not null references public.profiles(id) on delete cascade,
+  client_id uuid not null references public.profiles(id) on delete cascade,
+  sender_id uuid not null references public.profiles(id) on delete cascade,
+  message text not null check (char_length(trim(message)) > 0 and char_length(message) <= 2000),
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists chat_messages_client_created_idx
+on public.chat_messages(client_id, created_at asc);
+
+create index if not exists chat_messages_coach_created_idx
+on public.chat_messages(coach_id, created_at asc);
+
 create table if not exists public.subscriptions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references public.profiles(id) on delete cascade,
@@ -254,6 +285,7 @@ alter table public.archived_clients enable row level security;
 alter table public.client_snapshots enable row level security;
 alter table public.app_config enable row level security;
 alter table public.notifications enable row level security;
+alter table public.chat_messages enable row level security;
 alter table public.subscriptions enable row level security;
 alter table public.blog_posts enable row level security;
 
@@ -384,6 +416,53 @@ on public.notifications
 for delete
 using (
   recipient_id = auth.uid()
+  or public.is_owner_coach()
+);
+
+drop policy if exists "chat_messages_select_client_or_owner" on public.chat_messages;
+create policy "chat_messages_select_client_or_owner"
+on public.chat_messages
+for select
+using (
+  client_id = auth.uid()
+  or coach_id = auth.uid()
+  or public.is_owner_coach()
+);
+
+drop policy if exists "chat_messages_insert_client_or_owner" on public.chat_messages;
+create policy "chat_messages_insert_client_or_owner"
+on public.chat_messages
+for insert
+with check (
+  sender_id = auth.uid()
+  and (
+    client_id = auth.uid()
+    or public.is_owner_coach()
+  )
+);
+
+drop policy if exists "chat_messages_update_read_client_or_owner" on public.chat_messages;
+create policy "chat_messages_update_read_client_or_owner"
+on public.chat_messages
+for update
+using (
+  client_id = auth.uid()
+  or coach_id = auth.uid()
+  or public.is_owner_coach()
+)
+with check (
+  client_id = auth.uid()
+  or coach_id = auth.uid()
+  or public.is_owner_coach()
+);
+
+drop policy if exists "chat_messages_delete_client_or_owner" on public.chat_messages;
+create policy "chat_messages_delete_client_or_owner"
+on public.chat_messages
+for delete
+using (
+  client_id = auth.uid()
+  or coach_id = auth.uid()
   or public.is_owner_coach()
 );
 

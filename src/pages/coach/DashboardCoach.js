@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { jsPDF } from "jspdf";
+import ChatThread from "../../components/ChatThread";
 import GraphWeight from "../../components/GraphWeight";
 import MenuDay from "../../components/MenuDay";
 import NotificationsPanel from "../../components/NotificationsPanel";
@@ -7,36 +8,36 @@ import { createEmptyWeeklyPlan, DAY_KEYS, getMondayOfCurrentWeek } from "../../u
 import { BMR_METHODS, calcBMR, calcDeficit, calcMacros, calcTDEE, getBmrMethodLabel } from "../../utils/nutrition";
 import { addPdfBranding } from "../../utils/pdfBranding";
 
-function getScoreTone(score) {
-  if (Number(score) >= 7.5) return "good";
-  if (Number(score) >= 5) return "medium";
-  return "low";
-}
-
-function buildBilan(client) {
+function buildBilan(client, overrides = {}) {
+  const weight = Number(overrides.weight ?? client.weight ?? 70);
+  const height = Number(overrides.height ?? client.height ?? 170);
+  const age = Number(overrides.age ?? client.age ?? 30);
+  const sex = overrides.sex ?? client.sex ?? "male";
+  const bmrMethod = overrides.bmrMethod ?? client.bmrMethod ?? "mifflin";
+  const nap = Number(overrides.nap ?? client.nap ?? 1.4);
+  const deficitPercentage = Number(overrides.deficit ?? client.deficit ?? 20);
   const bmr = calcBMR(
-    client.weight || 70,
-    client.height || 170,
-    client.age || 30,
-    client.sex || "male",
-    client.bmrMethod || "mifflin"
+    weight,
+    height,
+    age,
+    sex,
+    bmrMethod
   );
-  const tdee = calcTDEE(bmr, client.nap || 1.4);
-  const deficitCalories = calcDeficit(tdee, client.deficit || 20);
-  const macros = calcMacros(client.weight || 70, deficitCalories);
+  const tdee = calcTDEE(bmr, nap);
+  const deficitCalories = calcDeficit(tdee, deficitPercentage);
+  const macros = calcMacros(weight, deficitCalories);
+  const bmi = height > 0 ? weight / ((height / 100) ** 2) : null;
 
   return {
     bmr: Math.round(bmr),
     tdee: Math.round(tdee),
     deficitCalories: Math.round(deficitCalories),
-    macros
+    macros,
+    bmi: Number.isFinite(bmi) ? Number(bmi.toFixed(1)) : null,
+    nap: Number.isFinite(nap) ? Number(nap.toFixed(2)) : 1.4,
+    deficitPercentage: Number.isFinite(deficitPercentage) ? deficitPercentage : 20,
+    bmrMethod
   };
-}
-
-function getClientCardName(name) {
-  if (!name) return "Client";
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  return parts.slice(0, 2).join(" ");
 }
 
 function toDateKeyLocal(value) {
@@ -61,6 +62,102 @@ function addMonthsLocal(value, months) {
   return date;
 }
 
+function buildMenuSummary(menu) {
+  if (!menu) return { weekStart: "", text: "Aucun menu hebdomadaire enregistre." };
+  const plan = menu.plan || {};
+  const daySummaries = DAY_KEYS.map((day) => {
+    const meals = plan[day.key] || {};
+    const filled = Object.values(meals).filter((value) => String(value || "").trim()).length;
+    return `${day.label}: ${filled}/4 repas renseignes`;
+  });
+  const note = String(menu.notes || "").trim();
+  return {
+    weekStart: menu.weekStart || "",
+    text: `${daySummaries.join(" | ")}${note ? ` | Notes: ${note}` : ""}`
+  };
+}
+
+function buildProgressSnapshot(client) {
+  const history = Array.isArray(client.history) ? [...client.history] : [];
+  history.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const firstWeight = history[0]?.weight ? Number(history[0].weight) : null;
+  const lastWeight = history[history.length - 1]?.weight ? Number(history[history.length - 1].weight) : null;
+  const deltaWeight =
+    Number.isFinite(firstWeight) && Number.isFinite(lastWeight)
+      ? Number((lastWeight - firstWeight).toFixed(1))
+      : null;
+
+  const latestCheckin = Array.isArray(client.checkins) && client.checkins.length > 0 ? client.checkins[0] : null;
+  const latestGoals = Array.isArray(client.goals) && client.goals.length > 0 ? client.goals[0] : null;
+  const goalsCount = Array.isArray(latestGoals?.goals) ? latestGoals.goals.length : 0;
+  const goalsDone = Array.isArray(latestGoals?.goals)
+    ? latestGoals.goals.filter((goal) => Boolean(goal?.done)).length
+    : 0;
+
+  return {
+    firstWeight,
+    lastWeight,
+    deltaWeight,
+    latestCheckinScore: latestCheckin?.score ?? null,
+    latestCheckinWeek: latestCheckin?.weekStart ?? "",
+    goalsDone,
+    goalsCount,
+    goalsWeek: latestGoals?.weekStart || ""
+  };
+}
+
+function parseCsvLine(line, delimiter) {
+  const out = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === "\"") {
+      if (inQuotes && line[i + 1] === "\"") {
+        current += "\"";
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === delimiter && !inQuotes) {
+      out.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  out.push(current.trim());
+  return out;
+}
+
+function parseCsvText(text) {
+  const rows = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!rows.length) return [];
+  const delimiter = rows[0].includes(";") ? ";" : ",";
+  const headers = parseCsvLine(rows[0], delimiter).map((value) => value.toLowerCase());
+  return rows.slice(1).map((row) => {
+    const values = parseCsvLine(row, delimiter);
+    const mapped = {};
+    headers.forEach((header, index) => {
+      mapped[header] = values[index] || "";
+    });
+    return mapped;
+  });
+}
+
+function getCsvField(row, aliases) {
+  for (const key of aliases) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
 export default function DashboardCoach({
   coach,
   clients,
@@ -71,7 +168,6 @@ export default function DashboardCoach({
   onCreateReport,
   onArchiveClient,
   onSaveWeeklyMenu,
-  onSaveWeeklyGoals,
   onRestoreArchivedClient,
   notifications,
   onMarkNotificationRead,
@@ -81,21 +177,25 @@ export default function DashboardCoach({
   onCancelAppointment,
   onSaveBlogPost,
   onDeleteBlogPost,
-  onUploadBlogCover
+  onUploadBlogCover,
+  chatMessages,
+  onSendChatMessage,
+  onMarkChatRead,
+  onDeleteChatHistory,
+  forcedView,
+  onChangeView
 }) {
-  const [messageByClientId, setMessageByClientId] = useState({});
   const [deficitByClientId, setDeficitByClientId] = useState({});
   const [napByClientId, setNapByClientId] = useState({});
   const [bmrMethodByClientId, setBmrMethodByClientId] = useState({});
+  const [reportDraftByClientId, setReportDraftByClientId] = useState({});
   const [menuDraftByClientId, setMenuDraftByClientId] = useState({});
-  const [goalsDraftByClientId, setGoalsDraftByClientId] = useState({});
   const [appointmentDraftByClientId, setAppointmentDraftByClientId] = useState({});
   const [selectedClientId, setSelectedClientId] = useState("");
   const [activeAppointmentClientId, setActiveAppointmentClientId] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(() => monthStartLocal(new Date()));
   const [selectedCalendarDate, setSelectedCalendarDate] = useState(() => toDateKeyLocal(new Date()));
   const [coachView, setCoachView] = useState("clients");
-  const [openSectionsByClientId, setOpenSectionsByClientId] = useState({});
   const [isCreatingBlogPost, setIsCreatingBlogPost] = useState(false);
   const [blogDraft, setBlogDraft] = useState({
     id: "",
@@ -109,11 +209,23 @@ export default function DashboardCoach({
     coverImageUrl: ""
   });
   const [blogCoverFile, setBlogCoverFile] = useState(null);
+  const [blogCsvFile, setBlogCsvFile] = useState(null);
+  const [blogCsvStatus, setBlogCsvStatus] = useState("");
+
+  const setCoachViewSynced = (nextView) => {
+    setCoachView(nextView);
+    if (typeof onChangeView === "function") {
+      onChangeView(nextView);
+    }
+  };
 
   useEffect(() => {
-    setMessageByClientId(
-      Object.fromEntries(clients.map((client) => [client.id, client.coachMessage || ""]))
-    );
+    if (forcedView && forcedView !== coachView) {
+      setCoachView(forcedView);
+    }
+  }, [forcedView, coachView]);
+
+  useEffect(() => {
     setDeficitByClientId(
       Object.fromEntries(clients.map((client) => [client.id, client.deficit ?? 20]))
     );
@@ -123,6 +235,23 @@ export default function DashboardCoach({
     setBmrMethodByClientId(
       Object.fromEntries(clients.map((client) => [client.id, client.bmrMethod || "mifflin"]))
     );
+    setReportDraftByClientId((prev) => {
+      const next = { ...prev };
+      for (const client of clients) {
+        if (!next[client.id]) {
+          next[client.id] = {
+            sessionNotes: client.coachMessage || "",
+            objectives: ""
+          };
+        }
+      }
+      for (const clientId of Object.keys(next)) {
+        if (!clients.some((client) => client.id === clientId)) {
+          delete next[clientId];
+        }
+      }
+      return next;
+    });
 
     const drafts = Object.fromEntries(
       clients.map((client) => {
@@ -145,26 +274,6 @@ export default function DashboardCoach({
     );
     setMenuDraftByClientId(drafts);
 
-    const goalsDrafts = Object.fromEntries(
-      clients.map((client) => {
-        const latestGoals = client.goals?.[0];
-        return [
-          client.id,
-          latestGoals
-            ? { weekStart: latestGoals.weekStart, goals: latestGoals.goals || [] }
-            : {
-                weekStart: getMondayOfCurrentWeek(),
-                goals: [
-                  { title: "Objectif 1", target: "", done: false },
-                  { title: "Objectif 2", target: "", done: false },
-                  { title: "Objectif 3", target: "", done: false }
-                ]
-              }
-        ];
-      })
-    );
-    setGoalsDraftByClientId(goalsDrafts);
-
     if (clients.length === 0) {
       setSelectedClientId("");
       setActiveAppointmentClientId("");
@@ -175,30 +284,6 @@ export default function DashboardCoach({
     if (activeAppointmentClientId && !clients.some((client) => client.id === activeAppointmentClientId)) {
       setActiveAppointmentClientId("");
     }
-
-    setOpenSectionsByClientId((prev) => {
-      const next = { ...prev };
-      for (const client of clients) {
-        if (!next[client.id]) {
-          next[client.id] = {
-            nutrition: true,
-            goals: true,
-            message: true,
-            checkins: true,
-            food: true,
-            appointments: true,
-            menu: false,
-            photos: false
-          };
-        }
-      }
-      for (const clientId of Object.keys(next)) {
-        if (!clients.some((client) => client.id === clientId)) {
-          delete next[clientId];
-        }
-      }
-      return next;
-    });
   }, [clients, selectedClientId, activeAppointmentClientId]);
 
   useEffect(() => {
@@ -244,69 +329,23 @@ export default function DashboardCoach({
     [clientsWithBilan, selectedClientId]
   );
 
-  const selectedClientFoodByDay = useMemo(() => {
-    if (!selectedClient?.foodLogs?.length) return [];
-    const groups = new Map();
-    for (const entry of selectedClient.foodLogs) {
-      const key = entry.consumedOn;
-      const current = groups.get(key) || [];
-      current.push(entry);
-      groups.set(key, current);
-    }
-    return Array.from(groups.entries())
-      .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([day, entries]) => {
-        const totals = entries.reduce(
-          (acc, item) => {
-            acc.calories += Number(item.calories || 0);
-            acc.protein += Number(item.protein || 0);
-            acc.carbs += Number(item.carbs || 0);
-            acc.fat += Number(item.fat || 0);
-            return acc;
-          },
-          { calories: 0, protein: 0, carbs: 0, fat: 0 }
-        );
-        return {
-          day,
-          entries: entries
-            .slice()
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-          totals: {
-            calories: Number(totals.calories.toFixed(0)),
-            protein: Number(totals.protein.toFixed(1)),
-            carbs: Number(totals.carbs.toFixed(1)),
-            fat: Number(totals.fat.toFixed(1))
-          }
-        };
-      });
-  }, [selectedClient]);
+  const selectedClientMetabolicPreview = useMemo(() => {
+    if (!selectedClient) return null;
+    return buildBilan(selectedClient, {
+      nap: napByClientId[selectedClient.id] ?? selectedClient.nap ?? 1.4,
+      deficit: deficitByClientId[selectedClient.id] ?? selectedClient.deficit ?? 20,
+      bmrMethod: bmrMethodByClientId[selectedClient.id] || selectedClient.bmrMethod || "mifflin"
+    });
+  }, [selectedClient, napByClientId, deficitByClientId, bmrMethodByClientId]);
 
-  const selectedClientFoodWeek = useMemo(() => {
-    if (!selectedClient?.foodLogs?.length) {
-      return { calories: 0, protein: 0, carbs: 0, fat: 0 };
-    }
-    const monday = new Date(getMondayOfCurrentWeek());
-    monday.setHours(0, 0, 0, 0);
-    const sunday = new Date(monday);
-    sunday.setDate(sunday.getDate() + 6);
-    const start = monday.getTime();
-    const end = sunday.getTime();
-    const totals = { calories: 0, protein: 0, carbs: 0, fat: 0 };
-    for (const entry of selectedClient.foodLogs) {
-      const day = new Date(`${entry.consumedOn}T12:00:00`).getTime();
-      if (day < start || day > end) continue;
-      totals.calories += Number(entry.calories || 0);
-      totals.protein += Number(entry.protein || 0);
-      totals.carbs += Number(entry.carbs || 0);
-      totals.fat += Number(entry.fat || 0);
-    }
-    return {
-      calories: Number(totals.calories.toFixed(0)),
-      protein: Number(totals.protein.toFixed(1)),
-      carbs: Number(totals.carbs.toFixed(1)),
-      fat: Number(totals.fat.toFixed(1))
-    };
-  }, [selectedClient]);
+  const selectedClientChatMessages = useMemo(() => {
+    if (!selectedClient) return [];
+    const fromGlobal = (Array.isArray(chatMessages) ? chatMessages : []).filter(
+      (entry) => entry.clientId === selectedClient.id
+    );
+    if (fromGlobal.length > 0) return fromGlobal;
+    return Array.isArray(selectedClient.chatMessages) ? selectedClient.chatMessages : [];
+  }, [chatMessages, selectedClient]);
 
   const allAppointments = useMemo(
     () =>
@@ -388,12 +427,6 @@ export default function DashboardCoach({
     await onUpdateClientPlan(clientId, { deficit });
   };
 
-  const saveMessage = async (client) => {
-    await onUpdateClientPlan(client.id, {
-      coachMessage: messageByClientId[client.id] || ""
-    });
-  };
-
   const saveMetabolicProfile = async (clientId) => {
     const nap = Number(napByClientId[clientId]);
     if (Number.isNaN(nap)) return;
@@ -406,13 +439,33 @@ export default function DashboardCoach({
   };
 
   const createReport = async (client) => {
-    const message = messageByClientId[client.id] || "";
+    const draft = reportDraftByClientId[client.id] || { sessionNotes: "", objectives: "" };
+    const sessionNotes = (draft.sessionNotes || "").trim();
+    const objectives = (draft.objectives || "").trim();
+    const message = sessionNotes || client.coachMessage || "";
     const bilan = buildBilan(client);
+    const menuSummary = buildMenuSummary(menuDraftByClientId[client.id] || client.weeklyMenus?.[0] || null);
+    const progress = buildProgressSnapshot(client);
+    const mensurations = {
+      waistCm: client.waistCm ?? null,
+      hipCm: client.hipCm ?? null,
+      chestCm: client.chestCm ?? null,
+      armCm: client.armCm ?? null,
+      thighCm: client.thighCm ?? null
+    };
+    const bilanPayload = {
+      ...bilan,
+      sessionNotes,
+      objectives,
+      mensurations,
+      menuSummary,
+      progress
+    };
 
     await onCreateReport({
       clientId: client.id,
       message,
-      bilan
+      bilan: bilanPayload
     });
 
     const doc = new jsPDF();
@@ -425,15 +478,37 @@ export default function DashboardCoach({
     doc.text(`Objectif: ${client.goal || "-"}`, 14, 44 + offset);
     doc.text(`Poids: ${client.weight || "-"} kg`, 14, 54 + offset);
     doc.text(`Deficit: ${client.deficit || 20}%`, 14, 64 + offset);
-    doc.text(`BMR: ${bilan.bmr} kcal`, 14, 74 + offset);
-    doc.text(`TDEE: ${bilan.tdee} kcal`, 14, 84 + offset);
-    doc.text(`Calories cible: ${bilan.deficitCalories} kcal`, 14, 94 + offset);
+    doc.text(`BMR: ${bilanPayload.bmr} kcal`, 14, 74 + offset);
+    doc.text(`TDEE: ${bilanPayload.tdee} kcal`, 14, 84 + offset);
+    doc.text(`Calories cible: ${bilanPayload.deficitCalories} kcal`, 14, 94 + offset);
     doc.text(
-      `Macros: Proteines ${bilan.macros.protein}g / Lipides ${bilan.macros.fat}g / Glucides ${bilan.macros.carbs}g`,
+      `Macros: Proteines ${bilanPayload.macros.protein}g / Lipides ${bilanPayload.macros.fat}g / Glucides ${bilanPayload.macros.carbs}g`,
       14,
       104 + offset
     );
-    doc.text(`Message: ${message || "-"}`, 14, 118 + offset, { maxWidth: 180 });
+    let y = 118 + offset;
+    const writeWrapped = (label, value) => {
+      const lines = doc.splitTextToSize(`${label}: ${value || "-"}`, 180);
+      doc.text(lines, 14, y);
+      y += 6 * lines.length + 2;
+    };
+    writeWrapped("Notes de seance", message || "-");
+    writeWrapped("Objectifs fixes", objectives || "-");
+    writeWrapped("Menu donne", menuSummary.text || "-");
+    writeWrapped(
+      "Progression",
+      `${progress.firstWeight ?? "-"} kg -> ${progress.lastWeight ?? "-"} kg (delta ${
+        progress.deltaWeight ?? "-"
+      } kg), Check-in ${progress.latestCheckinScore ?? "-"} (${
+        progress.latestCheckinWeek || "-"
+      }), Objectifs ${progress.goalsDone}/${progress.goalsCount} (${progress.goalsWeek || "-"})`
+    );
+    writeWrapped(
+      "Mensurations (cm)",
+      `Taille ${mensurations.waistCm ?? "-"} | Hanches ${mensurations.hipCm ?? "-"} | Poitrine ${
+        mensurations.chestCm ?? "-"
+      } | Bras ${mensurations.armCm ?? "-"} | Cuisse ${mensurations.thighCm ?? "-"}`
+    );
     doc.save(`bilan-coach-${client.name}.pdf`);
   };
 
@@ -484,32 +559,6 @@ export default function DashboardCoach({
     });
   };
 
-  const updateGoal = (clientId, index, field, value) => {
-    setGoalsDraftByClientId((prev) => {
-      const current = prev[clientId] || { weekStart: getMondayOfCurrentWeek(), goals: [] };
-      const goals = [...(current.goals || [])];
-      const existing = goals[index] || { title: "", target: "", done: false };
-      goals[index] = { ...existing, [field]: value };
-      return {
-        ...prev,
-        [clientId]: {
-          ...current,
-          goals
-        }
-      };
-    });
-  };
-
-  const saveWeeklyGoalsForClient = async (client) => {
-    const draft = goalsDraftByClientId[client.id];
-    if (!draft?.weekStart) return;
-    await onSaveWeeklyGoals({
-      clientId: client.id,
-      weekStart: draft.weekStart,
-      goals: draft.goals || []
-    });
-  };
-
   const loadAppointmentDraft = (clientId, appointment) => {
     if (!appointment) return;
     const starts = new Date(appointment.startsAt);
@@ -522,7 +571,7 @@ export default function DashboardCoach({
         appointmentId: appointment.id,
         startsAtLocal: local,
         durationMinutes: duration,
-        status: appointment.status || "requested",
+        status: appointment.status === "cancelled" ? "cancelled" : "confirmed",
         meetUrl: appointment.meetUrl || "",
         notes: appointment.notes || ""
       }
@@ -553,16 +602,6 @@ export default function DashboardCoach({
     await onRestoreArchivedClient(archiveId);
   };
 
-  const toggleSection = (clientId, sectionKey) => {
-    setOpenSectionsByClientId((prev) => ({
-      ...prev,
-      [clientId]: {
-        ...(prev[clientId] || {}),
-        [sectionKey]: !(prev[clientId] || {})[sectionKey]
-      }
-    }));
-  };
-
   const slugify = (value) =>
     (value || "")
       .toLowerCase()
@@ -571,6 +610,56 @@ export default function DashboardCoach({
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/(^-|-$)/g, "")
       .slice(0, 80);
+
+  const importBlogCsv = async () => {
+    if (!blogCsvFile) return;
+    try {
+      setBlogCsvStatus("Import en cours...");
+      const text = await blogCsvFile.text();
+      const rows = parseCsvText(text);
+      if (!rows.length) {
+        setBlogCsvStatus("CSV vide ou invalide.");
+        return;
+      }
+
+      let imported = 0;
+      for (const row of rows) {
+        const title = getCsvField(row, ["title", "titre", "name", "nom"]);
+        const content = getCsvField(row, ["content", "contenu", "body"]);
+        if (!title || !content) continue;
+
+        const excerpt =
+          getCsvField(row, ["excerpt", "resume", "résumé", "summary"]) || content.slice(0, 180);
+        const category = getCsvField(row, ["category", "categorie", "catégorie"]) || "Astuces";
+        const readMinutesRaw = Number(
+          getCsvField(row, ["readminutes", "read_minutes", "temps", "reading_time"])
+        );
+        const readMinutes = Number.isFinite(readMinutesRaw) && readMinutesRaw > 0 ? readMinutesRaw : 4;
+        const coverImageUrl = getCsvField(row, ["coverimageurl", "cover_image_url", "image", "cover"]);
+        const publishedRaw = getCsvField(row, ["published", "publie", "publié", "is_published"]).toLowerCase();
+        const isPublished = !["0", "false", "non", "no"].includes(publishedRaw);
+
+        await onSaveBlogPost({
+          title,
+          slug: `${slugify(title) || "article"}-${Date.now().toString().slice(-6)}-${Math.floor(Math.random() * 1000)}`,
+          excerpt,
+          content,
+          category,
+          readMinutes,
+          coverImageUrl,
+          isPublished
+        });
+        imported += 1;
+      }
+
+      setBlogCsvStatus(
+        imported > 0 ? `${imported} article(s) importe(s).` : "Aucun article valide trouve dans le CSV."
+      );
+      setBlogCsvFile(null);
+    } catch {
+      setBlogCsvStatus("Erreur pendant l'import CSV.");
+    }
+  };
 
   const loadBlogPost = (post) => {
     setIsCreatingBlogPost(false);
@@ -654,44 +743,6 @@ export default function DashboardCoach({
         title="Notifications coach"
       />
 
-      <section className="panel coach-nav">
-        <button
-          className={coachView === "clients" ? "primary" : "ghost"}
-          type="button"
-          onClick={() => setCoachView("clients")}
-        >
-          Clients
-        </button>
-        <button
-          className={coachView === "menus" ? "primary" : "ghost"}
-          type="button"
-          onClick={() => setCoachView("menus")}
-        >
-          Menus
-        </button>
-        <button
-          className={coachView === "appointments" ? "primary" : "ghost"}
-          type="button"
-          onClick={() => setCoachView("appointments")}
-        >
-          Rendez-vous
-        </button>
-        <button
-          className={coachView === "blog" ? "primary" : "ghost"}
-          type="button"
-          onClick={() => setCoachView("blog")}
-        >
-          Blog
-        </button>
-        <button
-          className={coachView === "archives" ? "primary" : "ghost"}
-          type="button"
-          onClick={() => setCoachView("archives")}
-        >
-          Archives
-        </button>
-      </section>
-
       <section className="coach-kpis">
         <article className="panel coach-kpi">
           <small>Clients actifs</small>
@@ -707,601 +758,213 @@ export default function DashboardCoach({
         </article>
       </section>
 
-      {coachView === "clients" && clientsWithBilan.length > 0 ? (
-        <div className="coach-layout">
-          <aside className="panel coach-clients-aside">
-            <h3>Clients</h3>
-            <div className="client-card-grid">
+      {clientsWithBilan.length > 0 ? (
+        <section className="panel coach-client-picker">
+          <label>
+            Client selectionne
+            <select
+              value={selectedClientId}
+              onChange={(event) => setSelectedClientId(event.target.value)}
+              disabled={busy}
+            >
               {clientsWithBilan.map((client) => (
-                <button
-                  key={client.id}
-                  type="button"
-                  className={`client-mini-card ${selectedClient?.id === client.id ? "is-active" : ""}`}
-                  onClick={() => setSelectedClientId(client.id)}
-                >
-                  <strong>{getClientCardName(client.name)}</strong>
-                </button>
+                <option key={`pick-${client.id}`} value={client.id}>
+                  {client.name}
+                </option>
               ))}
-            </div>
-          </aside>
+            </select>
+          </label>
+        </section>
+      ) : null}
 
+      {coachView === "clients" && clientsWithBilan.length > 0 ? (
+        <article className="panel client-detail-panel">
           {selectedClient ? (
-            <article className="panel client-detail-panel">
+            <>
               <div className="row-between">
                 <h3>{selectedClient.name}</h3>
                 <span>{selectedClient.email}</span>
               </div>
               <div className="detail-top-actions">
-                <button className="primary" type="button" disabled={busy} onClick={() => createReport(selectedClient)}>
-                  Generer bilan PDF
-                </button>
                 <button className="danger" type="button" disabled={busy} onClick={() => archiveClient(selectedClient)}>
                   Archiver + Supprimer
                 </button>
               </div>
 
-              <div className="metric-grid">
-                <article>
-                  <small>BMR</small>
-                  <p>{selectedClient.bilan.bmr} kcal</p>
-                </article>
-                <article>
-                  <small>TDEE</small>
-                  <p>{selectedClient.bilan.tdee} kcal</p>
-                </article>
-                <article>
-                  <small>Calories cible</small>
-                  <p>{selectedClient.bilan.deficitCalories} kcal</p>
-                </article>
-                <article>
-                  <small>Macros</small>
-                  <p>
-                    Proteines {selectedClient.bilan.macros.protein} / Lipides {selectedClient.bilan.macros.fat} / Glucides {selectedClient.bilan.macros.carbs}
-                  </p>
-                </article>
-              </div>
-              <p>
-                <strong>Parametres MB:</strong> NAP {selectedClient.nap} / {getBmrMethodLabel(selectedClient.bmrMethod)}
-              </p>
-
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "nutrition")}
-                >
-                  <strong>Nutrition</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.nutrition ? "−" : "+"}</span>
+              <section className="section-block">
+                <h4>Bilan de seance</h4>
+                <label>
+                  Ce qu'on s'est dit
+                  <textarea
+                    value={reportDraftByClientId[selectedClient.id]?.sessionNotes || ""}
+                    onChange={(event) =>
+                      setReportDraftByClientId((prev) => ({
+                        ...prev,
+                        [selectedClient.id]: {
+                          ...(prev[selectedClient.id] || {}),
+                          sessionNotes: event.target.value
+                        }
+                      }))
+                    }
+                    placeholder="Resume de la consultation, points importants..."
+                    disabled={busy}
+                  />
+                </label>
+                <label>
+                  Objectifs fixes
+                  <textarea
+                    value={reportDraftByClientId[selectedClient.id]?.objectives || ""}
+                    onChange={(event) =>
+                      setReportDraftByClientId((prev) => ({
+                        ...prev,
+                        [selectedClient.id]: {
+                          ...(prev[selectedClient.id] || {}),
+                          objectives: event.target.value
+                        }
+                      }))
+                    }
+                    placeholder="Ex: 2L d'eau/jour, 10k pas, 3 repas structures..."
+                    disabled={busy}
+                  />
+                </label>
+                <button className="primary" type="button" disabled={busy} onClick={() => createReport(selectedClient)}>
+                  Enregistrer et generer bilan PDF
                 </button>
-                {openSectionsByClientId[selectedClient.id]?.nutrition ? (
-                  <div className="accordion-content">
-                    {selectedClient.history?.length ? <GraphWeight data={selectedClient.history} /> : <p>Pas encore de poids enregistres.</p>}
-
-                    <section className="section-block">
-                      <label>
-                        Deficit calorique (%)
-                        <input
-                          type="number"
-                          min="5"
-                          max="40"
-                          value={deficitByClientId[selectedClient.id] ?? 20}
-                          onChange={(event) =>
-                            setDeficitByClientId((prev) => ({
-                              ...prev,
-                              [selectedClient.id]: event.target.value
-                            }))
-                          }
-                          disabled={busy}
-                        />
-                      </label>
-                      <button className="ghost" type="button" disabled={busy} onClick={() => saveDeficit(selectedClient.id)}>
-                        Enregistrer deficit
-                      </button>
-                    </section>
-
-                    <section className="section-block section-inline-grid">
-                      <label>
-                        NAP du client
-                        <input
-                          type="number"
-                          step="0.05"
-                          min="1.2"
-                          max="2.2"
-                          value={napByClientId[selectedClient.id] ?? 1.4}
-                          onChange={(event) =>
-                            setNapByClientId((prev) => ({
-                              ...prev,
-                              [selectedClient.id]: event.target.value
-                            }))
-                          }
-                          disabled={busy}
-                        />
-                      </label>
-
-                      <label>
-                        Methode de calcul MB
-                        <select
-                          value={bmrMethodByClientId[selectedClient.id] || "mifflin"}
-                          onChange={(event) =>
-                            setBmrMethodByClientId((prev) => ({
-                              ...prev,
-                              [selectedClient.id]: event.target.value
-                            }))
-                          }
-                          disabled={busy}
-                        >
-                          {BMR_METHODS.map((method) => (
-                            <option key={method.value} value={method.value}>
-                              {method.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button className="ghost" type="button" disabled={busy} onClick={() => saveMetabolicProfile(selectedClient.id)}>
-                        Enregistrer NAP + methode MB
-                      </button>
-                    </section>
-                  </div>
-                ) : null}
               </section>
 
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "goals")}
-                >
-                  <strong>Objectifs</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.goals ? "−" : "+"}</span>
-                </button>
-                {openSectionsByClientId[selectedClient.id]?.goals ? (
-                  <div className="accordion-content">
-                    <section className="section-block">
-                      <label>
-                        Semaine (lundi)
-                        <input
-                          type="date"
-                          value={goalsDraftByClientId[selectedClient.id]?.weekStart || getMondayOfCurrentWeek()}
-                          onChange={(event) =>
-                            setGoalsDraftByClientId((prev) => ({
-                              ...prev,
-                              [selectedClient.id]: {
-                                ...(prev[selectedClient.id] || {}),
-                                weekStart: event.target.value
-                              }
-                            }))
-                          }
-                          disabled={busy}
-                        />
-                      </label>
-                      <div className="checkin-list">
-                        {[0, 1, 2].map((index) => (
-                          <article key={`goal-${index}`} className="checkin-item">
-                            <label>
-                              Titre objectif {index + 1}
-                              <input
-                                type="text"
-                                value={goalsDraftByClientId[selectedClient.id]?.goals?.[index]?.title || ""}
-                                onChange={(event) => updateGoal(selectedClient.id, index, "title", event.target.value)}
-                                disabled={busy}
-                              />
-                            </label>
-                            <label>
-                              Cible mesurable
-                              <input
-                                type="text"
-                                value={goalsDraftByClientId[selectedClient.id]?.goals?.[index]?.target || ""}
-                                onChange={(event) => updateGoal(selectedClient.id, index, "target", event.target.value)}
-                                placeholder="Ex: 3 seances / 10k pas"
-                                disabled={busy}
-                              />
-                            </label>
-                          </article>
-                        ))}
-                      </div>
-                      <button className="ghost" type="button" disabled={busy} onClick={() => saveWeeklyGoalsForClient(selectedClient)}>
-                        Enregistrer objectifs hebdo
-                      </button>
-                    </section>
-                  </div>
+              <section className="section-block">
+                <h4>Nutrition</h4>
+                {selectedClientMetabolicPreview ? (
+                  <section className="metric-grid">
+                    <article>
+                      <small>Poids actuel</small>
+                      <p>{selectedClient.weight ? `${Number(selectedClient.weight).toFixed(1)} kg` : "—"}</p>
+                    </article>
+                    <article>
+                      <small>IMC</small>
+                      <p>{selectedClientMetabolicPreview.bmi ? `${selectedClientMetabolicPreview.bmi}` : "—"}</p>
+                    </article>
+                    <article>
+                      <small>NAP</small>
+                      <p>{selectedClientMetabolicPreview.nap}</p>
+                    </article>
+                    <article>
+                      <small>BMR ({getBmrMethodLabel(selectedClientMetabolicPreview.bmrMethod)})</small>
+                      <p>{selectedClientMetabolicPreview.bmr} kcal</p>
+                    </article>
+                    <article>
+                      <small>TDEE</small>
+                      <p>{selectedClientMetabolicPreview.tdee} kcal</p>
+                    </article>
+                    <article>
+                      <small>Cible avec deficit ({selectedClientMetabolicPreview.deficitPercentage}%)</small>
+                      <p>{selectedClientMetabolicPreview.deficitCalories} kcal</p>
+                    </article>
+                  </section>
                 ) : null}
-              </section>
+                {selectedClient.history?.length ? <GraphWeight data={selectedClient.history} /> : <p>Pas encore de poids enregistres.</p>}
 
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "checkins")}
-                >
-                  <strong>Check-ins</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.checkins ? "−" : "+"}</span>
-                </button>
-                {openSectionsByClientId[selectedClient.id]?.checkins ? (
-                  <div className="accordion-content">
-                    {(selectedClient.checkins || []).length ? (
-                      <>
-                        <p className="checkin-score">
-                          Dernier score:{" "}
-                          <strong className={`score-chip tone-${getScoreTone(selectedClient.checkins[0].score)}`}>
-                            {selectedClient.checkins[0].score}/10
-                          </strong>{" "}
-                          ({selectedClient.checkins[0].weekStart})
-                        </p>
-                        <div className="checkin-list">
-                          {selectedClient.checkins.slice(0, 8).map((entry) => (
-                            <article key={entry.id} className="checkin-item">
-                              <div className="row-between">
-                                <strong>{entry.weekStart}</strong>
-                                <strong className={`score-chip tone-${getScoreTone(entry.score)}`}>{entry.score}/10</strong>
-                              </div>
-                              <small>
-                                Energie {entry.energy} | Faim {entry.hunger} | Sommeil {entry.sleep} | Stress {entry.stress} | Adherence {entry.adherence}
-                              </small>
-                              {entry.notes ? <p>{entry.notes}</p> : null}
-                            </article>
-                          ))}
-                        </div>
-                      </>
-                    ) : (
-                      <p>Aucun check-in recu pour ce client.</p>
-                    )}
-                  </div>
-                ) : null}
-              </section>
+                <section className="section-block">
+                  <label>
+                    Deficit calorique (%)
+                    <input
+                      type="number"
+                      min="5"
+                      max="40"
+                      value={deficitByClientId[selectedClient.id] ?? 20}
+                      onChange={(event) =>
+                        setDeficitByClientId((prev) => ({
+                          ...prev,
+                          [selectedClient.id]: event.target.value
+                        }))
+                      }
+                      disabled={busy}
+                    />
+                  </label>
+                  <button className="ghost" type="button" disabled={busy} onClick={() => saveDeficit(selectedClient.id)}>
+                    Enregistrer deficit
+                  </button>
+                </section>
 
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "food")}
-                >
-                  <strong>Journal alimentaire</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.food ? "−" : "+"}</span>
-                </button>
-                {openSectionsByClientId[selectedClient.id]?.food ? (
-                  <div className="accordion-content">
-                    <p className="macro-line">
-                      Semaine en cours: {selectedClientFoodWeek.calories} kcal | Proteines {selectedClientFoodWeek.protein}g | Glucides {selectedClientFoodWeek.carbs}g | Lipides {selectedClientFoodWeek.fat}g
-                    </p>
-                    {!selectedClientFoodByDay.length ? <p>Aucune entree alimentaire pour ce client.</p> : null}
-                    <div className="checkin-list">
-                      {selectedClientFoodByDay.slice(0, 10).map((day) => (
-                        <article key={day.day} className="checkin-item">
-                          <div className="row-between">
-                            <strong>{new Date(`${day.day}T12:00:00`).toLocaleDateString()}</strong>
-                            <small>
-                              {day.totals.calories} kcal | P {day.totals.protein} | G {day.totals.carbs} | L {day.totals.fat}
-                            </small>
-                          </div>
-                          <ul className="simple-list">
-                            {day.entries.map((entry) => (
-                              <li key={entry.id} className="row-between">
-                                <span>{entry.foodName} ({entry.quantityG}g)</span>
-                                <small>{Math.round(entry.calories)} kcal</small>
-                              </li>
-                            ))}
-                          </ul>
-                        </article>
+                <section className="section-block section-inline-grid">
+                  <label>
+                    NAP du client
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="1.2"
+                      max="2.2"
+                      value={napByClientId[selectedClient.id] ?? 1.4}
+                      onChange={(event) =>
+                        setNapByClientId((prev) => ({
+                          ...prev,
+                          [selectedClient.id]: event.target.value
+                        }))
+                      }
+                      disabled={busy}
+                    />
+                  </label>
+
+                  <label>
+                    Methode de calcul MB
+                    <select
+                      value={bmrMethodByClientId[selectedClient.id] || "mifflin"}
+                      onChange={(event) =>
+                        setBmrMethodByClientId((prev) => ({
+                          ...prev,
+                          [selectedClient.id]: event.target.value
+                        }))
+                      }
+                      disabled={busy}
+                    >
+                      {BMR_METHODS.map((method) => (
+                        <option key={method.value} value={method.value}>
+                          {method.label}
+                        </option>
                       ))}
-                    </div>
-                  </div>
-                ) : null}
+                    </select>
+                  </label>
+                  <button className="ghost" type="button" disabled={busy} onClick={() => saveMetabolicProfile(selectedClient.id)}>
+                    Enregistrer NAP + methode MB
+                  </button>
+                </section>
               </section>
 
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "appointments")}
-                >
-                  <strong>Rendez-vous visio</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.appointments ? "−" : "+"}</span>
-                </button>
-                {openSectionsByClientId[selectedClient.id]?.appointments ? (
-                  <div className="accordion-content">
-                    {(selectedClient.appointments || []).length ? (
-                      <div className="checkin-list">
-                        {selectedClient.appointments.map((appointment) => (
-                          <article key={appointment.id} className="checkin-item">
-                            <div className="row-between">
-                              <strong>{new Date(appointment.startsAt).toLocaleString()}</strong>
-                              <span className={`score-chip tone-${appointment.status === "confirmed" ? "good" : appointment.status === "cancelled" ? "low" : "medium"}`}>
-                                {appointment.status}
-                              </span>
-                            </div>
-                            {appointment.notes ? <p>{appointment.notes}</p> : null}
-                            <div className="row-actions">
-                              {appointment.meetUrl ? (
-                                <a className="primary-link" href={appointment.meetUrl} target="_blank" rel="noreferrer">
-                                  Ouvrir Google Meet
-                                </a>
-                              ) : (
-                                <small>Pas encore de lien visio</small>
-                              )}
-                              {appointment.status !== "cancelled" ? (
-                                <button
-                                  className="danger"
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() => onCancelAppointment(appointment.id)}
-                                >
-                                  Annuler
-                                </button>
-                              ) : null}
-                              <button
-                                className="ghost"
-                                type="button"
-                                disabled={busy}
-                                onClick={() => loadAppointmentDraft(selectedClient.id, appointment)}
-                              >
-                                Modifier
-                              </button>
-                            </div>
-                          </article>
-                        ))}
-                      </div>
-                    ) : (
-                      <p>Aucun rendez-vous reserve pour ce client.</p>
-                    )}
-
-                    {appointmentDraftByClientId[selectedClient.id]?.appointmentId ? (
-                      <section className="section-block">
-                        <h4>Edition du rendez-vous</h4>
-                        <label>
-                          Date et heure
-                          <input
-                            type="datetime-local"
-                            value={appointmentDraftByClientId[selectedClient.id]?.startsAtLocal || ""}
-                            onChange={(event) =>
-                              setAppointmentDraftByClientId((prev) => ({
-                                ...prev,
-                                [selectedClient.id]: {
-                                  ...(prev[selectedClient.id] || {}),
-                                  startsAtLocal: event.target.value
-                                }
-                              }))
-                            }
-                            disabled={busy}
-                          />
-                        </label>
-                        <label>
-                          Duree
-                          <select
-                            value={appointmentDraftByClientId[selectedClient.id]?.durationMinutes || 45}
-                            onChange={(event) =>
-                              setAppointmentDraftByClientId((prev) => ({
-                                ...prev,
-                                [selectedClient.id]: {
-                                  ...(prev[selectedClient.id] || {}),
-                                  durationMinutes: Number(event.target.value)
-                                }
-                              }))
-                            }
-                            disabled={busy}
-                          >
-                            <option value={30}>30 min</option>
-                            <option value={45}>45 min</option>
-                            <option value={60}>60 min</option>
-                          </select>
-                        </label>
-                        <label>
-                          Statut
-                          <select
-                            value={appointmentDraftByClientId[selectedClient.id]?.status || "requested"}
-                            onChange={(event) =>
-                              setAppointmentDraftByClientId((prev) => ({
-                                ...prev,
-                                [selectedClient.id]: {
-                                  ...(prev[selectedClient.id] || {}),
-                                  status: event.target.value
-                                }
-                              }))
-                            }
-                            disabled={busy}
-                          >
-                            <option value="requested">requested</option>
-                            <option value="confirmed">confirmed</option>
-                            <option value="cancelled">cancelled</option>
-                          </select>
-                        </label>
-                        <label>
-                          Lien visio
-                          <input
-                            type="url"
-                            value={appointmentDraftByClientId[selectedClient.id]?.meetUrl || ""}
-                            onChange={(event) =>
-                              setAppointmentDraftByClientId((prev) => ({
-                                ...prev,
-                                [selectedClient.id]: {
-                                  ...(prev[selectedClient.id] || {}),
-                                  meetUrl: event.target.value
-                                }
-                              }))
-                            }
-                            placeholder="https://meet.google.com/..."
-                            disabled={busy}
-                          />
-                        </label>
-                        <button
-                          className="ghost"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => window.open("https://meet.new", "_blank", "noopener,noreferrer")}
-                        >
-                          Creer un Google Meet
-                        </button>
-                        <label>
-                          Notes
-                          <textarea
-                            value={appointmentDraftByClientId[selectedClient.id]?.notes || ""}
-                            onChange={(event) =>
-                              setAppointmentDraftByClientId((prev) => ({
-                                ...prev,
-                                [selectedClient.id]: {
-                                  ...(prev[selectedClient.id] || {}),
-                                  notes: event.target.value
-                                }
-                              }))
-                            }
-                            disabled={busy}
-                          />
-                        </label>
-                        <button className="primary" type="button" disabled={busy} onClick={() => saveAppointmentForClient(selectedClient)}>
-                          Enregistrer rendez-vous
-                        </button>
+              <section className="section-block">
+                <h4>Photos du client</h4>
+                {selectedClient.photos?.length ? null : <p>Aucune photo recue.</p>}
+                <div className="photo-grid">
+                  {(selectedClient.photos || []).map((photo) => (
+                    <figure key={photo.id} className="photo-card">
+                      <img
+                        src={photo.imageUrl}
+                        alt={`Progression de ${selectedClient.name}`}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <figcaption>
+                        <small>{new Date(photo.createdAt).toLocaleDateString()}</small>
+                        {photo.caption ? <p>{photo.caption}</p> : null}
                         <button
                           className="danger"
                           type="button"
                           disabled={busy}
-                          onClick={() =>
-                            onCancelAppointment(appointmentDraftByClientId[selectedClient.id]?.appointmentId)
-                          }
+                          onClick={() => onDeletePhoto(photo.id)}
                         >
-                          Annuler ce rendez-vous
+                          Supprimer
                         </button>
-                      </section>
-                    ) : null}
-                  </div>
-                ) : null}
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
               </section>
-
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "message")}
-                >
-                  <strong>Message</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.message ? "−" : "+"}</span>
-                </button>
-                {openSectionsByClientId[selectedClient.id]?.message ? (
-                  <div className="accordion-content">
-                    <section className="section-block">
-                      <label>
-                        Message du coach
-                        <textarea
-                          value={messageByClientId[selectedClient.id] || ""}
-                          onChange={(event) =>
-                            setMessageByClientId((prev) => ({
-                              ...prev,
-                              [selectedClient.id]: event.target.value
-                            }))
-                          }
-                          placeholder="Consignes de la semaine"
-                        />
-                      </label>
-                      <button className="ghost" type="button" disabled={busy} onClick={() => saveMessage(selectedClient)}>
-                        Enregistrer message
-                      </button>
-                    </section>
-                  </div>
-                ) : null}
-              </section>
-
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "menu")}
-                >
-                  <strong>Menu hebdomadaire</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.menu ? "−" : "+"}</span>
-                </button>
-                {openSectionsByClientId[selectedClient.id]?.menu ? (
-                  <div className="accordion-content">
-                    <section className="menu-builder">
-                      <div className="row-between">
-                        <h4>Planning repas</h4>
-                        <input
-                          type="date"
-                          value={menuDraftByClientId[selectedClient.id]?.weekStart || getMondayOfCurrentWeek()}
-                          onChange={(event) =>
-                            setMenuDraft(selectedClient.id, (draft) => ({ ...draft, weekStart: event.target.value }))
-                          }
-                          disabled={busy}
-                        />
-                      </div>
-
-                      <label>
-                        Notes du coach
-                        <textarea
-                          value={menuDraftByClientId[selectedClient.id]?.notes || ""}
-                          onChange={(event) =>
-                            setMenuDraft(selectedClient.id, (draft) => ({ ...draft, notes: event.target.value }))
-                          }
-                          placeholder="Consignes generales de la semaine"
-                        />
-                      </label>
-
-                      <div className="menu-days-stack">
-                        {DAY_KEYS.map((day) => (
-                          <MenuDay
-                            key={day.key}
-                            dayLabel={day.label}
-                            meals={menuDraftByClientId[selectedClient.id]?.plan?.[day.key]}
-                            onChangeMeal={(mealKey, value) => updateMeal(selectedClient.id, day.key, mealKey, value)}
-                          />
-                        ))}
-                      </div>
-
-                      <button
-                        className="primary"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => saveWeeklyMenuForClient(selectedClient)}
-                      >
-                        Enregistrer menu hebdomadaire
-                      </button>
-                    </section>
-                  </div>
-                ) : null}
-              </section>
-
-              <section className="accordion-block">
-                <button
-                  className="accordion-toggle"
-                  type="button"
-                  onClick={() => toggleSection(selectedClient.id, "photos")}
-                >
-                  <strong>Photos</strong>
-                  <span>{openSectionsByClientId[selectedClient.id]?.photos ? "−" : "+"}</span>
-                </button>
-                {openSectionsByClientId[selectedClient.id]?.photos ? (
-                  <div className="accordion-content">
-                    <section className="photo-review">
-                      <h4>Photos envoyees par le client</h4>
-                      {selectedClient.photos?.length ? null : <p>Aucune photo recue.</p>}
-                      <div className="photo-grid">
-                        {(selectedClient.photos || []).map((photo) => (
-                          <figure key={photo.id} className="photo-card">
-                            <img
-                              src={photo.imageUrl}
-                              alt={`Progression de ${selectedClient.name}`}
-                              loading="lazy"
-                              decoding="async"
-                            />
-                            <figcaption>
-                              <small>{new Date(photo.createdAt).toLocaleDateString()}</small>
-                              {photo.caption ? <p>{photo.caption}</p> : null}
-                              <button
-                                className="danger"
-                                type="button"
-                                disabled={busy}
-                                onClick={() => onDeletePhoto(photo.id)}
-                              >
-                                Supprimer
-                              </button>
-                            </figcaption>
-                          </figure>
-                        ))}
-                      </div>
-                    </section>
-                  </div>
-                ) : null}
-              </section>
-            </article>
-          ) : null}
-        </div>
+            </>
+          ) : (
+            <section className="section-block">
+              <p>Selectionne un client.</p>
+            </section>
+          )}
+        </article>
       ) : null}
 
       {coachView === "clients" && clientsWithBilan.length === 0 ? (
@@ -1316,74 +979,56 @@ export default function DashboardCoach({
             <h3>Menus hebdomadaires</h3>
             <small>{clientsWithBilan.length} clients</small>
           </div>
-          <div className="coach-layout">
-            <aside className="panel coach-clients-aside">
-              <h4>Clients</h4>
-              <div className="client-card-grid">
-                {clientsWithBilan.map((client) => (
-                  <button
-                    key={`menu-${client.id}`}
-                    type="button"
-                    className={`client-mini-card ${selectedClient?.id === client.id ? "is-active" : ""}`}
-                    onClick={() => setSelectedClientId(client.id)}
-                  >
-                    <strong>{getClientCardName(client.name)}</strong>
-                  </button>
+          {selectedClient ? (
+            <section className="section-block">
+              <div className="row-between">
+                <h4>Menu de {selectedClient.name}</h4>
+                <input
+                  type="date"
+                  value={menuDraftByClientId[selectedClient.id]?.weekStart || getMondayOfCurrentWeek()}
+                  onChange={(event) =>
+                    setMenuDraft(selectedClient.id, (draft) => ({ ...draft, weekStart: event.target.value }))
+                  }
+                  disabled={busy}
+                />
+              </div>
+
+              <label>
+                Notes du coach
+                <textarea
+                  value={menuDraftByClientId[selectedClient.id]?.notes || ""}
+                  onChange={(event) =>
+                    setMenuDraft(selectedClient.id, (draft) => ({ ...draft, notes: event.target.value }))
+                  }
+                  placeholder="Consignes generales de la semaine"
+                />
+              </label>
+
+              <div className="menu-days-stack">
+                {DAY_KEYS.map((day) => (
+                  <MenuDay
+                    key={`menu-tab-${day.key}`}
+                    dayLabel={day.label}
+                    meals={menuDraftByClientId[selectedClient.id]?.plan?.[day.key]}
+                    onChangeMeal={(mealKey, value) => updateMeal(selectedClient.id, day.key, mealKey, value)}
+                  />
                 ))}
               </div>
-            </aside>
 
-            {selectedClient ? (
-              <section className="section-block">
-                <div className="row-between">
-                  <h4>Menu de {selectedClient.name}</h4>
-                  <input
-                    type="date"
-                    value={menuDraftByClientId[selectedClient.id]?.weekStart || getMondayOfCurrentWeek()}
-                    onChange={(event) =>
-                      setMenuDraft(selectedClient.id, (draft) => ({ ...draft, weekStart: event.target.value }))
-                    }
-                    disabled={busy}
-                  />
-                </div>
-
-                <label>
-                  Notes du coach
-                  <textarea
-                    value={menuDraftByClientId[selectedClient.id]?.notes || ""}
-                    onChange={(event) =>
-                      setMenuDraft(selectedClient.id, (draft) => ({ ...draft, notes: event.target.value }))
-                    }
-                    placeholder="Consignes generales de la semaine"
-                  />
-                </label>
-
-                <div className="menu-days-stack">
-                  {DAY_KEYS.map((day) => (
-                    <MenuDay
-                      key={`menu-tab-${day.key}`}
-                      dayLabel={day.label}
-                      meals={menuDraftByClientId[selectedClient.id]?.plan?.[day.key]}
-                      onChangeMeal={(mealKey, value) => updateMeal(selectedClient.id, day.key, mealKey, value)}
-                    />
-                  ))}
-                </div>
-
-                <button
-                  className="primary"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => saveWeeklyMenuForClient(selectedClient)}
-                >
-                  Enregistrer menu hebdomadaire
-                </button>
-              </section>
-            ) : (
-              <section className="section-block">
-                <p>Selectionne un client pour modifier son menu.</p>
-              </section>
-            )}
-          </div>
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                onClick={() => saveWeeklyMenuForClient(selectedClient)}
+              >
+                Enregistrer menu hebdomadaire
+              </button>
+            </section>
+          ) : (
+            <section className="section-block">
+              <p>Selectionne un client pour modifier son menu.</p>
+            </section>
+          )}
         </article>
       ) : null}
 
@@ -1391,6 +1036,29 @@ export default function DashboardCoach({
         <article className="panel">
           <p>Aucun client inscrit.</p>
         </article>
+      ) : null}
+
+      {coachView === "messages" ? (
+      <article className="panel coach-view-panel">
+        <div className="row-between">
+          <h3>Messagerie coach-client</h3>
+          <small>{selectedClient ? selectedClient.name : "Aucun client"}</small>
+        </div>
+        {selectedClient ? (
+          <ChatThread
+            title={`Chat avec ${selectedClient.name}`}
+            currentUserId={coach.id}
+            messages={selectedClientChatMessages}
+            busy={busy}
+            placeholder="Ecris un message au client..."
+            onSend={(message) => onSendChatMessage?.({ clientId: selectedClient.id, message })}
+            onMarkRead={() => onMarkChatRead?.(selectedClient.id)}
+            onDeleteHistory={() => onDeleteChatHistory?.(selectedClient.id)}
+          />
+        ) : (
+          <p>Selectionne un client pour ouvrir la messagerie.</p>
+        )}
+      </article>
       ) : null}
 
       {coachView === "blog" ? (
@@ -1514,6 +1182,15 @@ export default function DashboardCoach({
               <button className="ghost" type="button" disabled={busy || !blogCoverFile} onClick={uploadCover}>
                 Upload image
               </button>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(event) => setBlogCsvFile(event.target.files?.[0] || null)}
+                disabled={busy}
+              />
+              <button className="ghost" type="button" disabled={busy || !blogCsvFile} onClick={importBlogCsv}>
+                Import CSV
+              </button>
               <label className="goal-toggle">
                 <input
                   type="checkbox"
@@ -1524,6 +1201,7 @@ export default function DashboardCoach({
                 <span>Publie</span>
               </label>
             </div>
+            {blogCsvStatus ? <p className="muted">{blogCsvStatus}</p> : null}
             <div className="row-actions">
               <button className="primary" type="button" disabled={busy} onClick={saveCurrentBlogPost}>
                 Enregistrer article
@@ -1714,7 +1392,7 @@ export default function DashboardCoach({
             <label>
               Statut
               <select
-                value={appointmentDraftByClientId[activeAppointmentClient.id]?.status || "requested"}
+                value={appointmentDraftByClientId[activeAppointmentClient.id]?.status || "confirmed"}
                 onChange={(event) =>
                   setAppointmentDraftByClientId((prev) => ({
                     ...prev,
@@ -1726,7 +1404,6 @@ export default function DashboardCoach({
                 }
                 disabled={busy}
               >
-                <option value="requested">requested</option>
                 <option value="confirmed">confirmed</option>
                 <option value="cancelled">cancelled</option>
               </select>
@@ -1783,7 +1460,7 @@ export default function DashboardCoach({
                 disabled={busy}
                 onClick={() => {
                   setSelectedClientId(activeAppointmentClient.id);
-                  setCoachView("clients");
+                  setCoachViewSynced("clients");
                 }}
               >
                 Ouvrir fiche client

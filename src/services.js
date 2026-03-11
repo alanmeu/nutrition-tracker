@@ -22,6 +22,15 @@ const SUBSCRIPTION_PLANS = {
   PREMIUM: "premium"
 };
 
+function withQueryParams(url, params) {
+  const target = new URL(url, SITE_URL);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    target.searchParams.set(key, String(value));
+  });
+  return target.toString();
+}
+
 function normalizePlanCode(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === SUBSCRIPTION_PLANS.PREMIUM) return SUBSCRIPTION_PLANS.PREMIUM;
@@ -189,6 +198,11 @@ function mapProfile(profile) {
     sex: profile.sex || "male",
     height: profile.height || 170,
     weight: profile.weight || 70,
+    waistCm: profile.waist_cm ?? null,
+    hipCm: profile.hip_cm ?? null,
+    chestCm: profile.chest_cm ?? null,
+    armCm: profile.arm_cm ?? null,
+    thighCm: profile.thigh_cm ?? null,
     goal: profile.goal || "",
     nap: profile.nap || 1.4,
     bmrMethod: profile.bmr_method || "mifflin",
@@ -272,6 +286,18 @@ function mapNotification(row) {
     title: row.title || "",
     body: row.body || "",
     readAt: row.read_at,
+    createdAt: row.created_at
+  };
+}
+
+function mapChatMessage(row) {
+  return {
+    id: row.id,
+    clientId: row.client_id,
+    coachId: row.coach_id,
+    senderId: row.sender_id,
+    message: row.message || "",
+    readAt: row.read_at || null,
     createdAt: row.created_at
   };
 }
@@ -607,6 +633,7 @@ export function subscribeRealtimeForProfile(profile, onChange) {
     addListener("subscriptions");
     addListener("notifications", `recipient_id=eq.${profile.id}`);
     addListener("archived_clients");
+    addListener("chat_messages");
   } else {
     addListener("profiles", `id=eq.${profile.id}`);
     addListener("weights", `user_id=eq.${profile.id}`);
@@ -619,6 +646,7 @@ export function subscribeRealtimeForProfile(profile, onChange) {
     addListener("food_logs", `client_id=eq.${profile.id}`);
     addListener("subscriptions", `user_id=eq.${profile.id}`);
     addListener("notifications", `recipient_id=eq.${profile.id}`);
+    addListener("chat_messages", `client_id=eq.${profile.id}`);
   }
 
   channel.subscribe();
@@ -752,6 +780,7 @@ export async function loadCurrentUserData(sessionUser) {
     let foodLogRows = [];
     let notificationRows = [];
     let blogRows = [];
+    let chatRows = [];
 
     if (clientIds.length > 0) {
       const [
@@ -765,7 +794,8 @@ export async function loadCurrentUserData(sessionUser) {
         { data: appointmentsData, error: appointmentsErr },
         { data: foodLogsData, error: foodLogsErr },
         { data: notificationsData, error: notificationsErr },
-        { data: blogData, error: blogErr }
+        { data: blogData, error: blogErr },
+        { data: chatData, error: chatErr }
       ] = await Promise.all([
         db
           .from("weights")
@@ -822,7 +852,12 @@ export async function loadCurrentUserData(sessionUser) {
           .from("blog_posts")
           .select("*")
           .order("updated_at", { ascending: false })
-          .limit(80)
+          .limit(80),
+        db
+          .from("chat_messages")
+          .select("*")
+          .in("client_id", clientIds)
+          .order("created_at", { ascending: true })
       ]);
 
       if (weightErr) throw weightErr;
@@ -836,6 +871,7 @@ export async function loadCurrentUserData(sessionUser) {
       if (foodLogsErr) throw foodLogsErr;
       if (notificationsErr) throw notificationsErr;
       if (blogErr) throw blogErr;
+      if (chatErr) throw chatErr;
       weights = weightRows || [];
       reports = reportRows || [];
       archivedRows = archivedData || [];
@@ -847,6 +883,7 @@ export async function loadCurrentUserData(sessionUser) {
       foodLogRows = foodLogsData || [];
       notificationRows = notificationsData || [];
       blogRows = blogData || [];
+      chatRows = chatData || [];
     } else {
       const [
         { data: archivedData, error: archivedErr },
@@ -857,7 +894,8 @@ export async function loadCurrentUserData(sessionUser) {
         { data: appointmentsData, error: appointmentsErr },
         { data: foodLogsData, error: foodLogsErr },
         { data: notificationsData, error: notificationsErr },
-        { data: blogData, error: blogErr }
+        { data: blogData, error: blogErr },
+        { data: chatData, error: chatErr }
       ] = await Promise.all([
         db
           .from("archived_clients")
@@ -898,7 +936,11 @@ export async function loadCurrentUserData(sessionUser) {
           .from("blog_posts")
           .select("*")
           .order("updated_at", { ascending: false })
-          .limit(80)
+          .limit(80),
+        db
+          .from("chat_messages")
+          .select("*")
+          .order("created_at", { ascending: true })
       ]);
       if (archivedErr) throw archivedErr;
       if (menusErr) throw menusErr;
@@ -909,6 +951,7 @@ export async function loadCurrentUserData(sessionUser) {
       if (foodLogsErr) throw foodLogsErr;
       if (notificationsErr) throw notificationsErr;
       if (blogErr) throw blogErr;
+      if (chatErr) throw chatErr;
       archivedRows = archivedData || [];
       menuRows = menusData || [];
       photoRows = photosData || [];
@@ -918,6 +961,7 @@ export async function loadCurrentUserData(sessionUser) {
       foodLogRows = foodLogsData || [];
       notificationRows = notificationsData || [];
       blogRows = blogData || [];
+      chatRows = chatData || [];
     }
 
     const clients = profileRows.map((row) => {
@@ -952,6 +996,9 @@ export async function loadCurrentUserData(sessionUser) {
       const clientFoodLogs = foodLogRows
         .filter((entry) => entry.client_id === row.id)
         .map(mapFoodLog);
+      const clientChatMessages = chatRows
+        .filter((entry) => entry.client_id === row.id)
+        .map(mapChatMessage);
 
       return {
         ...mapProfile(row),
@@ -962,7 +1009,8 @@ export async function loadCurrentUserData(sessionUser) {
         checkins: clientCheckins,
         goals: clientGoals,
         appointments: clientAppointments,
-        foodLogs: clientFoodLogs
+        foodLogs: clientFoodLogs,
+        chatMessages: clientChatMessages
       };
     });
 
@@ -986,7 +1034,8 @@ export async function loadCurrentUserData(sessionUser) {
       foodLogs: [],
       notifications: notificationRows.map(mapNotification),
       subscription: null,
-      blogPosts: blogRows.map(mapBlogPost)
+      blogPosts: blogRows.map(mapBlogPost),
+      chatMessages: chatRows.map(mapChatMessage)
     };
   }
 
@@ -1001,7 +1050,8 @@ export async function loadCurrentUserData(sessionUser) {
     { data: foodLogRows, error: foodLogErr },
     { data: subscriptionRow, error: subscriptionErr },
     { data: notificationRows, error: notificationErr },
-    { data: blogRows, error: blogErr }
+    { data: blogRows, error: blogErr },
+    { data: chatRows, error: chatErr }
   ] = await Promise.all([
     db
       .from("weights")
@@ -1060,7 +1110,12 @@ export async function loadCurrentUserData(sessionUser) {
       .select("*")
       .eq("is_published", true)
       .order("published_at", { ascending: false })
-      .limit(40)
+      .limit(40),
+    db
+      .from("chat_messages")
+      .select("*")
+      .eq("client_id", profile.id)
+      .order("created_at", { ascending: true })
   ]);
 
   if (weightErr) throw weightErr;
@@ -1074,6 +1129,7 @@ export async function loadCurrentUserData(sessionUser) {
   if (subscriptionErr) throw subscriptionErr;
   if (notificationErr) throw notificationErr;
   if (blogErr) throw blogErr;
+  if (chatErr) throw chatErr;
 
   let effectiveSubscriptionRow = subscriptionRow;
   if (effectiveSubscriptionRow && !isSubscriptionActiveStatus(effectiveSubscriptionRow.status)) {
@@ -1112,8 +1168,144 @@ export async function loadCurrentUserData(sessionUser) {
     foodLogs: (foodLogRows || []).map(mapFoodLog),
     notifications: (notificationRows || []).map(mapNotification),
     subscription: mapSubscription(effectiveSubscriptionRow),
-    blogPosts: (blogRows || []).map(mapBlogPost)
+    blogPosts: (blogRows || []).map(mapBlogPost),
+    chatMessages: (chatRows || []).map(mapChatMessage)
   };
+}
+
+export async function sendChatMessage({ clientId, message }) {
+  const db = requireSupabase();
+  const text = String(message || "").trim();
+  if (!text) {
+    throw new Error("Message vide.");
+  }
+
+  const {
+    data: { user },
+    error: userError
+  } = await db.auth.getUser();
+  if (userError || !user?.id) {
+    throw new Error("Utilisateur non authentifie.");
+  }
+
+  const senderId = user.id;
+  const { data: senderProfile } = await db
+    .from("profiles")
+    .select("id,email,role")
+    .eq("id", senderId)
+    .maybeSingle();
+  let ownerCoachId = "";
+
+  // 1) Preferred source: app_config.owner_coach_id
+  const { data: ownerConfig, error: ownerError } = await db
+    .from("app_config")
+    .select("owner_coach_id")
+    .eq("id", 1)
+    .maybeSingle();
+  if (!ownerError) {
+    ownerCoachId = String(ownerConfig?.owner_coach_id || "").trim();
+  }
+
+  // 2) If sender is coach, use sender as coach_id
+  if (!ownerCoachId) {
+    if (String(senderProfile?.role || "") === "coach") {
+      ownerCoachId = senderId;
+    }
+  }
+
+  // 3) Fallback by configured owner coach email
+  if (!ownerCoachId && OWNER_COACH_EMAIL) {
+    const { data: ownerProfile, error: ownerProfileError } = await db
+      .from("profiles")
+      .select("id")
+      .eq("email", OWNER_COACH_EMAIL)
+      .eq("role", "coach")
+      .maybeSingle();
+    if (!ownerProfileError && ownerProfile?.id) {
+      ownerCoachId = String(ownerProfile.id);
+    }
+  }
+
+  // 4) Last fallback: first available coach profile
+  if (!ownerCoachId) {
+    const { data: anyCoach, error: anyCoachError } = await db
+      .from("profiles")
+      .select("id")
+      .eq("role", "coach")
+      .limit(1)
+      .maybeSingle();
+    if (!anyCoachError && anyCoach?.id) {
+      ownerCoachId = String(anyCoach.id);
+    }
+  }
+
+  // Auto-initialize app_config when a coach is resolved.
+  if (ownerCoachId) {
+    await db.from("app_config").upsert(
+      {
+        id: 1,
+        owner_coach_id: ownerCoachId,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "id" }
+    );
+  }
+
+  // Final fallback: never block message send because of missing owner config.
+  if (!ownerCoachId) {
+    ownerCoachId = senderId;
+  }
+
+  const payload = {
+    client_id: clientId,
+    coach_id: ownerCoachId,
+    sender_id: senderId,
+    message: text
+  };
+
+  const { data, error } = await db
+    .from("chat_messages")
+    .insert(payload)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return mapChatMessage(data);
+}
+
+export async function markChatMessagesRead({ clientId }) {
+  const db = requireSupabase();
+  const {
+    data: { user },
+    error: userError
+  } = await db.auth.getUser();
+  if (userError || !user?.id) {
+    throw new Error("Utilisateur non authentifie.");
+  }
+
+  const { error } = await db
+    .from("chat_messages")
+    .update({
+      read_at: new Date().toISOString()
+    })
+    .eq("client_id", clientId)
+    .is("read_at", null)
+    .neq("sender_id", user.id);
+  if (error) throw error;
+}
+
+export async function deleteChatHistory({ clientId }) {
+  const db = requireSupabase();
+  const id = String(clientId || "").trim();
+  if (!id) {
+    throw new Error("Client introuvable.");
+  }
+
+  const { error } = await db
+    .from("chat_messages")
+    .delete()
+    .eq("client_id", id);
+
+  if (error) throw error;
 }
 
 export async function searchOpenFoodFactsFoods(query) {
@@ -1344,12 +1536,22 @@ export async function deleteFoodLogEntry(entryId) {
 
 export async function updateMyProfile(userId, updates) {
   const db = requireSupabase();
+  const parseOptionalNumber = (value) => {
+    if (value === "" || value === null || typeof value === "undefined") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
   const payload = {
     name: updates.name,
     age: Number(updates.age),
     sex: updates.sex,
     height: Number(updates.height),
     weight: Number(updates.weight),
+    waist_cm: parseOptionalNumber(updates.waistCm),
+    hip_cm: parseOptionalNumber(updates.hipCm),
+    chest_cm: parseOptionalNumber(updates.chestCm),
+    arm_cm: parseOptionalNumber(updates.armCm),
+    thigh_cm: parseOptionalNumber(updates.thighCm),
     goal: updates.goal,
     updated_at: new Date().toISOString()
   };
@@ -1614,9 +1816,13 @@ export async function bookMyAppointment({ clientId, startsAt, endsAt, notes }) {
     .single();
 
   if (error) throw normalizeAppointmentBookingError(error);
+  const rollbackAppointment = async () => {
+    await db.from("appointments").delete().eq("id", data.id);
+  };
 
+  let meetData = null;
   try {
-    const { data: meetData, error: meetError } = await db.functions.invoke("create-google-meet", {
+    const response = await db.functions.invoke("create-google-meet", {
       body: {
         start: startsAt,
         end: endsAt,
@@ -1626,42 +1832,56 @@ export async function bookMyAppointment({ clientId, startsAt, endsAt, notes }) {
       }
     });
 
-    if (meetError) {
-      throw meetError;
+    if (response.error) {
+      throw response.error;
     }
-
-    if (meetData?.meetUrl) {
-      const { data: updatedRow, error: updateError } = await db
-        .from("appointments")
-        .update({
-          meet_url: meetData.meetUrl,
-          google_event_id: meetData.eventId || null,
-          status: "confirmed",
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", data.id)
-        .select("*")
-        .single();
-
-      if (!updateError && updatedRow) {
-        data.meet_url = updatedRow.meet_url;
-        data.google_event_id = updatedRow.google_event_id;
-      }
+    meetData = response.data || null;
+    if (!meetData?.meetUrl) {
+      throw new Error("Lien Google Meet non genere.");
     }
-  } catch {
-    // If Meet generation fails, appointment still exists and coach can add link manually.
+  } catch (errorMeet) {
+    await rollbackAppointment();
+    throw new Error(
+      `Reservation impossible: creation du lien Google Meet echouee (${errorMeet?.message || "erreur inconnue"}).`
+    );
+  }
+
+  const { data: updatedRow, error: updateError } = await db
+    .from("appointments")
+    .update({
+      meet_url: meetData.meetUrl,
+      google_event_id: meetData.eventId || null,
+      status: "confirmed",
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", data.id)
+    .select("*")
+    .single();
+
+  if (updateError || !updatedRow) {
+    await rollbackAppointment();
+    throw new Error("Reservation impossible: validation du rendez-vous echouee.");
   }
 
   await safeNotify(async () => {
     await db.rpc("notify_owner_coach", {
       p_type: "appointment",
       p_title: "Nouveau rendez-vous visio",
-      p_body: `Demande pour la semaine du ${weekStart}.`,
+      p_body: `Rendez-vous confirme le ${new Date(startsAt).toLocaleString("fr-FR")}.\nLien Meet: ${meetData.meetUrl}`,
       p_client_id: clientId
     });
   });
 
-  return mapAppointment(data);
+  await safeNotify(async () => {
+    await db.rpc("notify_client", {
+      p_client_id: clientId,
+      p_type: "appointment",
+      p_title: "Rendez-vous confirme",
+      p_body: `Ton rendez-vous est confirme.\nLien Meet: ${meetData.meetUrl}`
+    });
+  });
+
+  return mapAppointment(updatedRow);
 }
 
 export async function updateAppointmentByCoach({
@@ -1850,13 +2070,22 @@ export async function createStripeCheckout(planCode = SUBSCRIPTION_PLANS.ESSENTI
   const db = requireSupabase();
   const normalizedPlan = normalizePlanCode(planCode);
   const priceId = getPriceIdForPlan(normalizedPlan);
+  const successUrl = withQueryParams(STRIPE_SUCCESS_URL, {
+    checkout: "success",
+    source: "subscription",
+    target: "suivi"
+  });
+  const cancelUrl = withQueryParams(STRIPE_CANCEL_URL, {
+    checkout: "cancel",
+    source: "subscription"
+  });
 
   const { data, error } = await db.functions.invoke("create-stripe-checkout", {
     body: {
       planCode: normalizedPlan,
       priceId,
-      successUrl: STRIPE_SUCCESS_URL,
-      cancelUrl: STRIPE_CANCEL_URL
+      successUrl,
+      cancelUrl
     }
   });
 

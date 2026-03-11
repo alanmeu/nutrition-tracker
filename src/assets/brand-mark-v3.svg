@@ -1,0 +1,36 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F4F8EF"/>
+      <stop offset="1" stop-color="#E8F2E8"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2F815B"/>
+      <stop offset="1" stop-color="#1E563D"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#66AE80"/>
+      <stop offset="1" stop-color="#2E7D56"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#DCA463"/>
+      <stop offset="1" stop-color="#B87B3C"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#bg)"/>
+
+  <circle cx="33" cy="34" r="15" fill="#FFFFFF"/>
+  <circle cx="33" cy="34" r="13" stroke="url(#ring)" stroke-width="2.5"/>
+
+  <ellipse cx="33" cy="34" rx="5.3" ry="10" fill="url(#leaf)" transform="rotate(22 33 34)"/>
+  <path d="M30.2 42.8C31.8 37.7 34.7 32.9 38.7 29" stroke="#1E563D" stroke-width="1.7" stroke-linecap="round"/>
+
+  <rect x="16" y="19" width="2.4" height="26" rx="1.2" fill="#5D6F64"/>
+  <rect x="14.8" y="19" width="4.8" height="2" rx="1" fill="#5D6F64"/>
+  <rect x="14.8" y="22.4" width="4.8" height="2" rx="1" fill="#5D6F64"/>
+
+  <path d="M48.2 19.2C46 19.2 44.2 21 44.2 23.2V31.4C44.2 33.1 45.5 34.4 47.2 34.4H48.5V45H50.6V34.4H51.8C53.5 34.4 54.8 33.1 54.8 31.4V23.2C54.8 21 53 19.2 50.8 19.2H48.2Z" fill="#5D6F64"/>
+
+  <circle cx="21" cy="47" r="3" fill="url(#accent)"/>
+</svg>

@@ -5,6 +5,21 @@ function formatDate(value) {
   return new Date(value).toLocaleString();
 }
 
+function renderBodyWithLinks(text) {
+  const value = String(text || "");
+  const parts = value.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, index) => {
+    if (/^https?:\/\/[^\s]+$/.test(part)) {
+      return (
+        <a key={`lnk-${index}`} href={part} target="_blank" rel="noreferrer">
+          {part}
+        </a>
+      );
+    }
+    return <React.Fragment key={`txt-${index}`}>{part}</React.Fragment>;
+  });
+}
+
 export default function NotificationsPanel({
   items,
   busy,
@@ -30,7 +45,7 @@ export default function NotificationsPanel({
           <li key={item.id} className={`notif-item ${item.readAt ? "is-read" : "is-unread"}`}>
             <div className="notif-main">
               <strong>{item.title}</strong>
-              {item.body ? <p>{item.body}</p> : null}
+              {item.body ? <p>{renderBodyWithLinks(item.body)}</p> : null}
               <small>{formatDate(item.createdAt)}</small>
             </div>
             <div className="notif-actions">
