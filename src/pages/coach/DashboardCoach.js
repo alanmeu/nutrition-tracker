@@ -487,14 +487,21 @@ export default function DashboardCoach({
       104 + offset
     );
     let y = 118 + offset;
+    const writeSection = (title) => {
+      doc.setFontSize(12);
+      doc.text(title, 14, y);
+      y += 7;
+    };
     const writeWrapped = (label, value) => {
       const lines = doc.splitTextToSize(`${label}: ${value || "-"}`, 180);
       doc.text(lines, 14, y);
       y += 6 * lines.length + 2;
     };
+    writeSection("Synthese seance");
     writeWrapped("Notes de seance", message || "-");
     writeWrapped("Objectifs fixes", objectives || "-");
     writeWrapped("Menu donne", menuSummary.text || "-");
+    writeSection("Progression client");
     writeWrapped(
       "Progression",
       `${progress.firstWeight ?? "-"} kg -> ${progress.lastWeight ?? "-"} kg (delta ${

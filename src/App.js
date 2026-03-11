@@ -25,6 +25,7 @@ import {
   listBusyAppointmentSlots,
   onAuthStateChange,
   restoreArchivedClient,
+  rescheduleMyAppointment,
   saveBlogPost,
   saveWeeklyGoals,
   saveWeeklyCheckin,
@@ -378,6 +379,17 @@ export default function App() {
     });
   };
 
+  const handleRescheduleAppointment = async (payload) => {
+    if (!profile) return;
+    await withBusy(async () => {
+      await rescheduleMyAppointment({
+        clientId: profile.id,
+        ...payload
+      });
+      refreshSilent();
+    });
+  };
+
   const handleUpdateAppointmentByCoach = async (payload) => {
     await withBusy(async () => {
       await updateAppointmentByCoach(payload);
@@ -682,7 +694,7 @@ export default function App() {
           <div>
             <h1>{headerTitle}</h1>
           </div>
-          <p className="brand-tagline">Nutrition claire, humaine et haut de gamme</p>
+          <p className="brand-tagline">Nutrition saine, humaine et durable</p>
         </div>
 
         <div className="header-actions">
@@ -870,6 +882,7 @@ export default function App() {
               appointments={appointments}
               busyAppointmentSlots={busyAppointmentSlots}
               onBookAppointment={handleBookAppointment}
+              onRescheduleAppointment={handleRescheduleAppointment}
               onCancelAppointment={handleCancelAppointment}
               onManageSubscription={handleManageSubscription}
               chatMessages={chatMessages}
@@ -902,6 +915,7 @@ export default function App() {
               appointments={appointments}
               busyAppointmentSlots={busyAppointmentSlots}
               onBookAppointment={handleBookAppointment}
+              onRescheduleAppointment={handleRescheduleAppointment}
               onCancelAppointment={handleCancelAppointment}
               onManageSubscription={handleManageSubscription}
               chatMessages={chatMessages}
@@ -934,6 +948,7 @@ export default function App() {
               appointments={appointments}
               busyAppointmentSlots={busyAppointmentSlots}
               onBookAppointment={handleBookAppointment}
+              onRescheduleAppointment={handleRescheduleAppointment}
               onCancelAppointment={handleCancelAppointment}
               onManageSubscription={handleManageSubscription}
               chatMessages={chatMessages}
@@ -964,6 +979,7 @@ export default function App() {
               appointments={appointments}
               busyAppointmentSlots={busyAppointmentSlots}
               onBookAppointment={handleBookAppointment}
+              onRescheduleAppointment={handleRescheduleAppointment}
               onCancelAppointment={handleCancelAppointment}
               onManageSubscription={handleManageSubscription}
               chatMessages={chatMessages}

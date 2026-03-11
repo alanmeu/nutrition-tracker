@@ -1761,6 +1761,25 @@ export async function listBusyAppointmentSlots(fromIso) {
   }));
 }
 
+async function createGoogleMeetLink(db, { startsAt, endsAt, notes }) {
+  const response = await db.functions.invoke("create-google-meet", {
+    body: {
+      start: startsAt,
+      end: endsAt,
+      summary: "Rendez-vous visio Nutri Cloud",
+      description: notes || "",
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris"
+    }
+  });
+
+  if (response.error) throw response.error;
+  const meetData = response.data || null;
+  if (!meetData?.meetUrl) {
+    throw new Error("Lien Google Meet non genere.");
+  }
+  return meetData;
+}
+
 export async function bookMyAppointment({ clientId, startsAt, endsAt, notes }) {
   const db = requireSupabase();
   if (!isWithinCoachAvailability(startsAt, endsAt)) {
@@ -1822,23 +1841,7 @@ export async function bookMyAppointment({ clientId, startsAt, endsAt, notes }) {
 
   let meetData = null;
   try {
-    const response = await db.functions.invoke("create-google-meet", {
-      body: {
-        start: startsAt,
-        end: endsAt,
-        summary: "Rendez-vous visio Nutri Cloud",
-        description: notes || "",
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris"
-      }
-    });
-
-    if (response.error) {
-      throw response.error;
-    }
-    meetData = response.data || null;
-    if (!meetData?.meetUrl) {
-      throw new Error("Lien Google Meet non genere.");
-    }
+    meetData = await createGoogleMeetLink(db, { startsAt, endsAt, notes });
   } catch (errorMeet) {
     await rollbackAppointment();
     throw new Error(
@@ -1884,6 +1887,101 @@ export async function bookMyAppointment({ clientId, startsAt, endsAt, notes }) {
   return mapAppointment(updatedRow);
 }
 
+export async function rescheduleMyAppointment({ appointmentId, clientId, startsAt, endsAt, notes }) {
+  const db = requireSupabase();
+  if (!appointmentId) throw new Error("Rendez-vous introuvable.");
+  if (!isWithinCoachAvailability(startsAt, endsAt)) {
+    throw new Error("Creneau hors disponibilites coach (lun, mar, jeu, ven, sam de 09:30 a 20:00).");
+  }
+
+  const { data: current, error: currentError } = await db
+    .from("appointments")
+    .select("id,client_id,status")
+    .eq("id", appointmentId)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current || current.client_id !== clientId) {
+    throw new Error("Rendez-vous introuvable.");
+  }
+  if (String(current.status || "").toLowerCase() === "cancelled") {
+    throw new Error("Ce rendez-vous est annule.");
+  }
+
+  const activeStatuses = ["requested", "confirmed"];
+  const { data: subscriptionRow, error: subscriptionError } = await db
+    .from("subscriptions")
+    .select("status,plan_code,stripe_price_id")
+    .eq("user_id", clientId)
+    .maybeSingle();
+  if (subscriptionError) throw subscriptionError;
+
+  const subscriptionStatus = String(subscriptionRow?.status || "inactive").toLowerCase();
+  if (!["active", "trialing", "past_due"].includes(subscriptionStatus)) {
+    throw new Error("Un abonnement actif est requis pour replanifier un rendez-vous.");
+  }
+
+  const planCode = resolveSubscriptionPlan(subscriptionRow);
+  const maxMonthlyAppointments = getMonthlyAppointmentLimit(planCode);
+  const monthBounds = getMonthBoundsISO(startsAt);
+  const { count: usedMonthlyAppointments, error: usageError } = await db
+    .from("appointments")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", clientId)
+    .in("status", activeStatuses)
+    .neq("id", appointmentId)
+    .gte("starts_at", monthBounds.start)
+    .lt("starts_at", monthBounds.end);
+  if (usageError) throw usageError;
+  if (Number(usedMonthlyAppointments || 0) >= maxMonthlyAppointments) {
+    throw new Error(
+      planCode === SUBSCRIPTION_PLANS.PREMIUM
+        ? "Limite atteinte: 4 rendez-vous ce mois-ci pour l'abonnement Premium."
+        : "Limite atteinte: 1 rendez-vous ce mois-ci pour l'abonnement Essentiel."
+    );
+  }
+
+  const meetData = await createGoogleMeetLink(db, { startsAt, endsAt, notes });
+  const weekStart = appointmentWeekStart(startsAt);
+  const { data, error } = await db
+    .from("appointments")
+    .update({
+      week_start: weekStart,
+      starts_at: startsAt,
+      ends_at: endsAt,
+      status: "confirmed",
+      notes: notes || "",
+      meet_url: meetData.meetUrl,
+      google_event_id: meetData.eventId || null,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", appointmentId)
+    .eq("client_id", clientId)
+    .select("*")
+    .single();
+
+  if (error) throw normalizeAppointmentBookingError(error);
+
+  await safeNotify(async () => {
+    await db.rpc("notify_owner_coach", {
+      p_type: "appointment",
+      p_title: "Rendez-vous replanifie",
+      p_body: `Nouveau creneau: ${new Date(startsAt).toLocaleString("fr-FR")}.\nLien Meet: ${meetData.meetUrl}`,
+      p_client_id: clientId
+    });
+  });
+
+  await safeNotify(async () => {
+    await db.rpc("notify_client", {
+      p_client_id: clientId,
+      p_type: "appointment",
+      p_title: "Rendez-vous replanifie",
+      p_body: `Ton rendez-vous est confirme.\nLien Meet: ${meetData.meetUrl}`
+    });
+  });
+
+  return mapAppointment(data);
+}
+
 export async function updateAppointmentByCoach({
   appointmentId,
   startsAt,
@@ -1897,6 +1995,14 @@ export async function updateAppointmentByCoach({
     throw new Error("Creneau hors disponibilites coach (lun, mar, jeu, ven, sam de 09:30 a 20:00).");
   }
 
+  const { data: current, error: currentError } = await db
+    .from("appointments")
+    .select("*")
+    .eq("id", appointmentId)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) throw new Error("Rendez-vous introuvable.");
+
   const payload = {
     updated_at: new Date().toISOString()
   };
@@ -1905,6 +2011,24 @@ export async function updateAppointmentByCoach({
   if (status) payload.status = status;
   if (typeof meetUrl !== "undefined") payload.meet_url = meetUrl || null;
   if (typeof notes !== "undefined") payload.notes = notes;
+
+  const startsToUse = startsAt || current.starts_at;
+  const endsToUse = endsAt || current.ends_at;
+  const statusToUse = status || current.status;
+  const notesToUse = typeof notes !== "undefined" ? notes : current.notes || "";
+  const timeChanged = Boolean(startsAt || endsAt);
+  const shouldGenerateMeet =
+    statusToUse === "confirmed" &&
+    (timeChanged || (!meetUrl && !current.meet_url));
+  if (shouldGenerateMeet) {
+    const meetData = await createGoogleMeetLink(db, {
+      startsAt: startsToUse,
+      endsAt: endsToUse,
+      notes: notesToUse
+    });
+    payload.meet_url = meetData.meetUrl;
+    payload.google_event_id = meetData.eventId || null;
+  }
 
   const { data, error } = await db
     .from("appointments")
@@ -1920,7 +2044,10 @@ export async function updateAppointmentByCoach({
       p_client_id: data.client_id,
       p_type: "appointment",
       p_title: "Mise a jour de ton rendez-vous visio",
-      p_body: data.status === "confirmed" ? "Ton rendez-vous est confirme." : "Ton rendez-vous a ete modifie."
+      p_body:
+        data.status === "confirmed"
+          ? `Ton rendez-vous est confirme.${data.meet_url ? `\nLien Meet: ${data.meet_url}` : ""}`
+          : "Ton rendez-vous a ete modifie."
     });
   });
 

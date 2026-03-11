@@ -26,6 +26,13 @@ export default function SubscriptionGate({
             {busy ? "Redirection..." : "Premium - 79€/mois (4 visios + WhatsApp)"}
           </button>
         </div>
+
+        <div className="legal-links">
+          <a href="/mentions-legales.html" target="_blank" rel="noreferrer">Mentions legales</a>
+          <a href="/cgv.html" target="_blank" rel="noreferrer">CGV</a>
+          <a href="/politique-confidentialite.html" target="_blank" rel="noreferrer">Confidentialite</a>
+          <a href="/politique-remboursement.html" target="_blank" rel="noreferrer">Remboursement</a>
+        </div>
       </section>
     </main>
   );

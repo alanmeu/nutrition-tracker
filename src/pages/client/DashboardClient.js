@@ -65,6 +65,7 @@ export default function DashboardClient({
   onSaveWeeklyCheckin,
   onUpdateWeeklyGoalsProgress,
   onBookAppointment,
+  onRescheduleAppointment,
   onManageSubscription,
   onMarkNotificationRead,
   onDeleteNotification,
@@ -160,6 +161,7 @@ export default function DashboardClient({
   const [checkinStepIndex, setCheckinStepIndex] = useState(0);
   const [selectedGoalsWeek, setSelectedGoalsWeek] = useState("");
   const [appointmentDraft, setAppointmentDraft] = useState({
+    appointmentId: "",
     startsAt: nextWeeklySlotLocal(),
     durationMinutes: 45,
     notes: ""
@@ -308,14 +310,21 @@ export default function DashboardClient({
     doc.setFontSize(12);
     doc.text(`Date: ${report.date}`, 14, 36 + offset);
     let y = 48 + offset;
+    const writeSection = (title) => {
+      doc.setFontSize(12);
+      doc.text(title, 14, y);
+      y += 7;
+    };
     const writeWrapped = (label, value) => {
       const lines = doc.splitTextToSize(`${label}: ${value || "-"}`, 180);
       doc.text(lines, 14, y);
       y += 6 * lines.length + 2;
     };
+    writeSection("Synthese seance");
     writeWrapped("Ce qu'on s'est dit", sessionNotes || "-");
     writeWrapped("Objectifs fixes", objectives || "-");
     writeWrapped("Menu donne", menuSummary || "-");
+    writeSection("Progression");
     if (progress) {
       writeWrapped(
         "Progression",
@@ -334,6 +343,7 @@ export default function DashboardClient({
         } | Bras ${mensurations.armCm ?? "-"} | Cuisse ${mensurations.thighCm ?? "-"}`
       );
     }
+    writeSection("Repere nutrition");
     writeWrapped("BMR", `${report.bilan.bmr} kcal`);
     writeWrapped("TDEE", `${report.bilan.tdee} kcal`);
     writeWrapped("Calories cible", `${report.bilan.deficitCalories} kcal`);
@@ -402,10 +412,39 @@ export default function DashboardClient({
       return;
     }
 
-    await onBookAppointment({
-      startsAt: startsAtDate.toISOString(),
-      endsAt: endsAtDate.toISOString(),
-      notes: appointmentDraft.notes
+    if (appointmentDraft.appointmentId) {
+      await onRescheduleAppointment({
+        appointmentId: appointmentDraft.appointmentId,
+        startsAt: startsAtDate.toISOString(),
+        endsAt: endsAtDate.toISOString(),
+        notes: appointmentDraft.notes
+      });
+    } else {
+      await onBookAppointment({
+        startsAt: startsAtDate.toISOString(),
+        endsAt: endsAtDate.toISOString(),
+        notes: appointmentDraft.notes
+      });
+    }
+    setAppointmentDraft({
+      appointmentId: "",
+      startsAt: nextWeeklySlotLocal(),
+      durationMinutes: 45,
+      notes: ""
+    });
+  };
+
+  const startReschedule = (appointment) => {
+    const startLocal = toDatetimeLocalValue(appointment.startsAt);
+    const durationMinutes = Math.max(
+      15,
+      Math.round((new Date(appointment.endsAt).getTime() - new Date(appointment.startsAt).getTime()) / 60000)
+    );
+    setAppointmentDraft({
+      appointmentId: appointment.id,
+      startsAt: startLocal || nextWeeklySlotLocal(),
+      durationMinutes,
+      notes: appointment.notes || ""
     });
   };
 
@@ -878,6 +917,9 @@ export default function DashboardClient({
           <div className="accordion-content">
             <p className="info-text">Tu peux reserver un seul rendez-vous par semaine. Les creneaux deja pris ne sont pas disponibles.</p>
             <div className="section-block">
+              {appointmentDraft.appointmentId ? (
+                <p className="info-text">Mode replanification active. Choisis un nouveau creneau puis valide.</p>
+              ) : null}
               <label>
                 Date et heure
                 <input
@@ -918,8 +960,25 @@ export default function DashboardClient({
                 />
               </label>
               <button className="primary" type="button" disabled={busy || selectedSlotIsTaken} onClick={submitAppointment}>
-                Prendre rendez-vous
+                {appointmentDraft.appointmentId ? "Valider la replanification" : "Prendre rendez-vous"}
               </button>
+              {appointmentDraft.appointmentId ? (
+                <button
+                  className="ghost"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    setAppointmentDraft({
+                      appointmentId: "",
+                      startsAt: nextWeeklySlotLocal(),
+                      durationMinutes: 45,
+                      notes: ""
+                    })
+                  }
+                >
+                  Annuler la replanification
+                </button>
+              ) : null}
               {selectedSlotIsTaken ? (
                 <p className="error-text">Ce creneau est deja reserve. Choisis un autre horaire.</p>
               ) : null}
@@ -966,6 +1025,16 @@ export default function DashboardClient({
                     ) : (
                       <small>Lien visio en attente de confirmation coach</small>
                     )}
+                    {appointment.status !== "cancelled" ? (
+                      <button
+                        className="ghost"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => startReschedule(appointment)}
+                      >
+                        Replanifier
+                      </button>
+                    ) : null}
                     {appointment.status !== "cancelled" ? (
                       <button
                         className="danger"
