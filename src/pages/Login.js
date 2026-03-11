@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { signIn, signUp } from "../services";
-import nutriCloudLogo from "../assets/nutri-cloud-logo.svg";
+import brandMark from "../assets/brand-mark-v3.svg";
 
 export default function Login({ busy, onError, onSuccess, error }) {
   const [mode, setMode] = useState("signin");
@@ -42,7 +42,7 @@ export default function Login({ busy, onError, onSuccess, error }) {
     <main className="auth-shell">
       <section className="auth-card">
         <div className="auth-brand-row">
-          <img src={nutriCloudLogo} alt="Nutri Cloud" className="auth-logo" />
+          <img src={brandMark} alt="Nutri Cloud" className="auth-logo" />
           <div className="auth-brand-text">
             <strong className="auth-brand-name">Nutri Cloud</strong>
             <span className="auth-brand-tagline">Coaching nutrition moderne</span>

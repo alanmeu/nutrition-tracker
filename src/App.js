@@ -5,7 +5,6 @@ import DashboardClient from "./pages/client/DashboardClient";
 import BlogClient from "./pages/client/BlogClient";
 import MenuClient from "./pages/client/MenuClient";
 import DashboardCoach from "./pages/coach/DashboardCoach";
-import SubscriptionGate from "./pages/client/SubscriptionGate";
 import {
   addWeightEntry,
   archiveAndDeleteClient,
@@ -47,6 +46,58 @@ import { hasSupabaseConfig } from "./utils/supabase";
 import usePwaInstall from "./hooks/usePwaInstall";
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
+const FREE_CLIENT_PAGES = new Set(["suivi", "menu", "blog"]);
+const FREE_SAMPLE_WEEKLY_MENUS = [
+  {
+    id: "free-menu-type",
+    weekStart: "Menu type",
+    notes: "Version gratuite: ce menu est un exemple standard. Passe en Pro pour un menu 100% personnalise.",
+    plan: {
+      monday: {
+        breakfast: "Skyr nature + flocons d'avoine + fruits rouges",
+        lunch: "Poulet grille + quinoa + legumes verts",
+        dinner: "Omelette + salade composee + pain complet",
+        snack: "Amandes + fruit"
+      },
+      tuesday: {
+        breakfast: "Yaourt grec + banane + graines de chia",
+        lunch: "Saumon au four + riz complet + brocoli",
+        dinner: "Soupe de legumes + tartines proteinees",
+        snack: "Fromage blanc + cannelle"
+      },
+      wednesday: {
+        breakfast: "Porridge avoine + pomme + beurre de cacahuete",
+        lunch: "Dinde + patate douce + haricots verts",
+        dinner: "Salade thon + avocat + tomates",
+        snack: "Skyr + noix"
+      },
+      thursday: {
+        breakfast: "Oeufs brouilles + pain complet + kiwi",
+        lunch: "Boeuf 5% + semoule + courgettes",
+        dinner: "Cabillaud + legumes rotis + quinoa",
+        snack: "Yaourt nature + fruits"
+      },
+      friday: {
+        breakfast: "Fromage blanc + muesli sans sucre + fraises",
+        lunch: "Poulet curry maison + riz basmati + salade",
+        dinner: "Wrap complet dinde + crudites",
+        snack: "Fruit + poignee d'amandes"
+      },
+      saturday: {
+        breakfast: "Smoothie proteine (lait + banane + avoine)",
+        lunch: "Bowl tofu + legumes + riz complet",
+        dinner: "Oeufs + pomme de terre vapeur + salade",
+        snack: "Skyr + myrtilles"
+      },
+      sunday: {
+        breakfast: "Pancakes avoine + yaourt + fruits",
+        lunch: "Poisson blanc + lentilles + legumes",
+        dinner: "Soupe + omelette + tranche de pain complet",
+        snack: "Fromage blanc + noix"
+      }
+    }
+  }
+];
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -657,32 +708,21 @@ export default function App() {
     return <Login busy={busy} onError={setError} onSuccess={refresh} error={error} />;
   }
 
+  const isCoach = isOwnerCoachProfile(profile);
   const hasActiveSubscription = Boolean(
     subscription &&
       ["active", "trialing", "past_due"].includes((subscription.status || "").toLowerCase())
   );
+  const isFreeClient = !isCoach && !hasActiveSubscription;
 
-  if (!isOwnerCoachProfile(profile) && !hasActiveSubscription) {
-    if (processingSubscriptionReturn) {
-      return (
-        <main className="setup-screen">
-          <section className="setup-card">
-            <h1>Activation de ton abonnement...</h1>
-            <p>Un instant, on finalise ton acces puis on t'envoie sur ton suivi.</p>
-          </section>
-        </main>
-      );
-    }
+  if (isFreeClient && processingSubscriptionReturn) {
     return (
-      <SubscriptionGate
-        user={profile}
-        subscription={subscription}
-        busy={busy}
-        error={error}
-        onSubscribe={handleSubscribe}
-        onManageSubscription={handleManageSubscription}
-        onSignOut={() => withBusy(signOut)}
-      />
+      <main className="setup-screen">
+        <section className="setup-card">
+          <h1>Activation de ton abonnement...</h1>
+          <p>Un instant, on finalise ton acces puis on t'envoie sur ton suivi.</p>
+        </section>
+      </main>
     );
   }
 
@@ -698,56 +738,90 @@ export default function App() {
         </div>
 
         <div className="header-actions">
-          {!isOwnerCoachProfile(profile) ? (
+          {!isCoach ? (
             <div className="client-nav">
-              <button
-                className={clientPage === "messagerie" ? "primary" : "ghost"}
-                type="button"
-                disabled={busy}
-                onClick={() => setClientPage("messagerie")}
-              >
-                Messagerie
-              </button>
-              <button
-                className={clientPage === "menu" ? "primary" : "ghost"}
-                type="button"
-                disabled={busy}
-                onClick={() => setClientPage("menu")}
-              >
-                Menu
-              </button>
-              <button
-                className={clientPage === "suivi" ? "primary" : "ghost"}
-                type="button"
-                disabled={busy}
-                onClick={() => setClientPage("suivi")}
-              >
-                Mon suivi
-              </button>
-              <button
-                className={clientPage === "rdv" ? "primary" : "ghost"}
-                type="button"
-                disabled={busy}
-                onClick={() => setClientPage("rdv")}
-              >
-                RDV
-              </button>
-              <button
-                className={clientPage === "blog" ? "primary" : "ghost"}
-                type="button"
-                disabled={busy}
-                onClick={() => setClientPage("blog")}
-              >
-                Blog
-              </button>
-              <button
-                className={clientPage === "autre" ? "primary" : "ghost"}
-                type="button"
-                disabled={busy}
-                onClick={() => setClientPage("autre")}
-              >
-                Autre
-              </button>
+              {isFreeClient ? (
+                <>
+                  <button
+                    className={clientPage === "suivi" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("suivi")}
+                  >
+                    Mon suivi
+                  </button>
+                  <button
+                    className={clientPage === "menu" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("menu")}
+                  >
+                    Menu type
+                  </button>
+                  <button
+                    className={clientPage === "blog" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("blog")}
+                  >
+                    Blog
+                  </button>
+                  <button className="primary" type="button" disabled={busy} onClick={() => handleSubscribe("premium")}>
+                    Passer Pro
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className={clientPage === "messagerie" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("messagerie")}
+                  >
+                    Messagerie
+                  </button>
+                  <button
+                    className={clientPage === "menu" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("menu")}
+                  >
+                    Menu
+                  </button>
+                  <button
+                    className={clientPage === "suivi" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("suivi")}
+                  >
+                    Mon suivi
+                  </button>
+                  <button
+                    className={clientPage === "rdv" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("rdv")}
+                  >
+                    RDV
+                  </button>
+                  <button
+                    className={clientPage === "blog" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("blog")}
+                  >
+                    Blog
+                  </button>
+                  <button
+                    className={clientPage === "autre" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("autre")}
+                  >
+                    Autre
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div className="client-nav">
@@ -827,10 +901,10 @@ export default function App() {
         </div>
       ) : null}
 
-      <main className={`container ${((!isOwnerCoachProfile(profile) && (clientPage === "menu" || clientPage === "blog")) || (isOwnerCoachProfile(profile) && (coachPage === "menus" || coachPage === "blog"))) ? "container-wide" : ""}`}>
+      <main className={`container ${((!isCoach && (clientPage === "menu" || clientPage === "blog")) || (isCoach && (coachPage === "menus" || coachPage === "blog"))) ? "container-wide" : ""}`}>
         {error ? <p className="error-banner">{error}</p> : null}
 
-        {isOwnerCoachProfile(profile) ? (
+        {isCoach ? (
           <DashboardCoach
             coach={profile}
             clients={clients}
@@ -858,6 +932,37 @@ export default function App() {
             onDeleteChatHistory={handleDeleteChatHistory}
             forcedView={coachPage}
             onChangeView={setCoachPage}
+          />
+        ) : !hasActiveSubscription && !FREE_CLIENT_PAGES.has(clientPage) ? (
+          <DashboardClient
+            user={profile}
+            subscription={subscription}
+            history={history}
+            reports={reports}
+            clientPhotos={clientPhotos}
+            weeklyCheckins={weeklyCheckins}
+            weeklyGoals={weeklyGoals}
+            notifications={notifications}
+            busy={busy}
+            onSaveProfile={handleSaveProfile}
+            onAddWeight={handleAddWeight}
+            onUploadPhoto={handleUploadClientPhoto}
+            onSaveWeeklyCheckin={handleSaveWeeklyCheckin}
+            onUpdateWeeklyGoalsProgress={handleUpdateWeeklyGoalsProgress}
+            onMarkNotificationRead={handleMarkNotificationRead}
+            onDeleteNotification={handleDeleteNotification}
+            onDeletePhoto={handleDeletePhoto}
+            appointments={appointments}
+            busyAppointmentSlots={busyAppointmentSlots}
+            onBookAppointment={handleBookAppointment}
+            onRescheduleAppointment={handleRescheduleAppointment}
+            onCancelAppointment={handleCancelAppointment}
+            onManageSubscription={handleManageSubscription}
+            chatMessages={chatMessages}
+            onSendChatMessage={handleSendChatMessage}
+            onMarkChatRead={handleMarkChatRead}
+            onDeleteChatHistory={handleDeleteChatHistory}
+            visibleSections={["profile"]}
           />
         ) : (
           clientPage === "messagerie" ? (
@@ -892,7 +997,7 @@ export default function App() {
               visibleSections={["messages", "photos", "reports"]}
             />
           ) : clientPage === "menu" ? (
-            <MenuClient weeklyMenus={weeklyMenus} />
+            <MenuClient weeklyMenus={hasActiveSubscription ? weeklyMenus : FREE_SAMPLE_WEEKLY_MENUS} />
           ) : clientPage === "rdv" ? (
             <DashboardClient
               user={profile}
@@ -986,7 +1091,7 @@ export default function App() {
               onSendChatMessage={handleSendChatMessage}
               onMarkChatRead={handleMarkChatRead}
               onDeleteChatHistory={handleDeleteChatHistory}
-              visibleSections={["profile", "weight", "reports", "checkins", "appointments"]}
+              visibleSections={hasActiveSubscription ? ["profile", "weight", "reports", "checkins", "appointments"] : ["profile"]}
             />
           )
         )}
