@@ -85,6 +85,7 @@ export default function DashboardClient({
     if (!visibleSectionSet) return true;
     return visibleSectionSet.has(sectionKey);
   };
+  const appointmentsVisible = isSectionVisible("appointments");
 
   const [profile, setProfile] = useState({
     name: user.name,
@@ -258,25 +259,6 @@ export default function DashboardClient({
       (entry) => entry.status !== "cancelled" && new Date(entry.startsAt).getTime() >= now
     ) || null;
   }, [myAppointments]);
-  const weeklyProgress = useMemo(() => {
-    const weekStart = getMondayOfCurrentWeek();
-    const hasWeeklyCheckin = (weeklyCheckins || []).some((entry) => entry.weekStart === weekStart);
-    const latestWeightDate = latestWeightEntry?.date ? String(latestWeightEntry.date) : "";
-    const hasWeightThisWeek = Boolean(latestWeightDate && latestWeightDate >= weekStart);
-    const hasUpcomingAppointment = Boolean(nextAppointment);
-    const steps = [
-      { label: "Poids mis a jour", done: hasWeightThisWeek },
-      { label: "Check-in envoye", done: hasWeeklyCheckin },
-      { label: "Rendez-vous planifie", done: hasUpcomingAppointment }
-    ];
-    const doneCount = steps.filter((item) => item.done).length;
-    return {
-      doneCount,
-      total: steps.length,
-      ratio: steps.length ? doneCount / steps.length : 0,
-      steps
-    };
-  }, [latestWeightEntry, nextAppointment, weeklyCheckins]);
 
   const takenSlotKeys = useMemo(
     () => new Set((busyAppointmentSlots || []).map((slot) => toDatetimeLocalValue(slot.startsAt)).filter(Boolean)),
@@ -480,21 +462,15 @@ export default function DashboardClient({
               <p className="eyebrow">Vue d'ensemble</p>
               <h3>Ton suivi en un coup d'oeil</h3>
             </div>
-            <span className={`score-chip tone-${weeklyProgress.ratio >= 0.67 ? "good" : weeklyProgress.ratio >= 0.34 ? "medium" : "low"}`}>
-              {weeklyProgress.doneCount}/{weeklyProgress.total}
-            </span>
           </div>
           <div className="overview-grid">
-            <article className="overview-card">
-              <small>Progression semaine</small>
-              <strong>{Math.round(weeklyProgress.ratio * 100)}%</strong>
-              <p>{weeklyProgress.doneCount} action(s) sur {weeklyProgress.total}</p>
-            </article>
-            <article className="overview-card">
-              <small>Prochain rendez-vous</small>
-              <strong>{nextAppointment ? new Date(nextAppointment.startsAt).toLocaleDateString() : "A planifier"}</strong>
-              <p>{nextAppointment ? new Date(nextAppointment.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Aucun creneau reserve"}</p>
-            </article>
+            {appointmentsVisible ? (
+              <article className="overview-card">
+                <small>Prochain rendez-vous</small>
+                <strong>{nextAppointment ? new Date(nextAppointment.startsAt).toLocaleDateString() : "A planifier"}</strong>
+                <p>{nextAppointment ? new Date(nextAppointment.startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Aucun creneau reserve"}</p>
+              </article>
+            ) : null}
             <article className="overview-card">
               <small>Dernier poids</small>
               <strong>{latestWeightEntry ? `${Number(latestWeightEntry.weight).toFixed(1)} kg` : "A renseigner"}</strong>

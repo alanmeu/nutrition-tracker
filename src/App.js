@@ -46,7 +46,7 @@ import { hasSupabaseConfig } from "./utils/supabase";
 import usePwaInstall from "./hooks/usePwaInstall";
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
-const FREE_CLIENT_PAGES = new Set(["suivi", "menu", "blog"]);
+const FREE_CLIENT_PAGES = new Set(["suivi", "menu", "blog", "messagerie"]);
 const FREE_SAMPLE_WEEKLY_MENUS = [
   {
     id: "free-menu-type",
@@ -743,6 +743,14 @@ export default function App() {
               {isFreeClient ? (
                 <>
                   <button
+                    className={clientPage === "messagerie" ? "primary" : "ghost"}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setClientPage("messagerie")}
+                  >
+                    Messagerie
+                  </button>
+                  <button
                     className={clientPage === "suivi" ? "primary" : "ghost"}
                     type="button"
                     disabled={busy}
@@ -994,7 +1002,7 @@ export default function App() {
               onSendChatMessage={handleSendChatMessage}
               onMarkChatRead={handleMarkChatRead}
               onDeleteChatHistory={handleDeleteChatHistory}
-              visibleSections={["messages", "photos", "reports"]}
+              visibleSections={hasActiveSubscription ? ["messages", "photos", "reports"] : ["messages"]}
             />
           ) : clientPage === "menu" ? (
             <MenuClient weeklyMenus={hasActiveSubscription ? weeklyMenus : FREE_SAMPLE_WEEKLY_MENUS} />
@@ -1091,7 +1099,7 @@ export default function App() {
               onSendChatMessage={handleSendChatMessage}
               onMarkChatRead={handleMarkChatRead}
               onDeleteChatHistory={handleDeleteChatHistory}
-              visibleSections={hasActiveSubscription ? ["profile", "weight", "reports", "checkins", "appointments"] : ["profile"]}
+              visibleSections={hasActiveSubscription ? ["profile", "weight", "checkins"] : ["profile"]}
             />
           )
         )}

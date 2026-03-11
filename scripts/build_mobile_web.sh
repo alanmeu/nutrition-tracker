@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MOBILE_DIR="$ROOT_DIR/mobile-native"
 
+# Load root .env so REACT_APP_* variables are available for Expo web export.
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
 cat > "$MOBILE_DIR/.env" <<EOF
 EXPO_PUBLIC_SUPABASE_URL=${REACT_APP_SUPABASE_URL:-}
 EXPO_PUBLIC_SUPABASE_ANON_KEY=${REACT_APP_SUPABASE_ANON_KEY:-}

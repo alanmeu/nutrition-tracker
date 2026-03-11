@@ -240,7 +240,7 @@ export default function DashboardCoach({
       for (const client of clients) {
         if (!next[client.id]) {
           next[client.id] = {
-            sessionNotes: client.coachMessage || "",
+            sessionNotes: "",
             objectives: ""
           };
         }
@@ -517,6 +517,14 @@ export default function DashboardCoach({
       } | Bras ${mensurations.armCm ?? "-"} | Cuisse ${mensurations.thighCm ?? "-"}`
     );
     doc.save(`bilan-coach-${client.name}.pdf`);
+
+    setReportDraftByClientId((prev) => ({
+      ...prev,
+      [client.id]: {
+        sessionNotes: "",
+        objectives: ""
+      }
+    }));
   };
 
   const archiveClient = async (client) => {
@@ -750,20 +758,22 @@ export default function DashboardCoach({
         title="Notifications coach"
       />
 
-      <section className="coach-kpis">
-        <article className="panel coach-kpi">
-          <small>Clients actifs</small>
-          <p>{clientsWithBilan.length}</p>
-        </article>
-        <article className="panel coach-kpi">
-          <small>Articles blog</small>
-          <p>{(blogPosts || []).length}</p>
-        </article>
-        <article className="panel coach-kpi">
-          <small>Clients archives</small>
-          <p>{(archivedClients || []).length}</p>
-        </article>
-      </section>
+      {coachView === "clients" ? (
+        <section className="coach-kpis">
+          <article className="panel coach-kpi">
+            <small>Clients actifs</small>
+            <p>{clientsWithBilan.length}</p>
+          </article>
+          <article className="panel coach-kpi">
+            <small>Articles blog</small>
+            <p>{(blogPosts || []).length}</p>
+          </article>
+          <article className="panel coach-kpi">
+            <small>Clients archives</small>
+            <p>{(archivedClients || []).length}</p>
+          </article>
+        </section>
+      ) : null}
 
       {clientsWithBilan.length > 0 ? (
         <section className="panel coach-client-picker">
@@ -869,6 +879,31 @@ export default function DashboardCoach({
                     </article>
                   </section>
                 ) : null}
+                <section className="section-block">
+                  <h4>Mensurations (cm)</h4>
+                  <section className="metric-grid">
+                    <article>
+                      <small>Taille</small>
+                      <p>{selectedClient.waistCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Hanches</small>
+                      <p>{selectedClient.hipCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Poitrine</small>
+                      <p>{selectedClient.chestCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Bras</small>
+                      <p>{selectedClient.armCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Cuisse</small>
+                      <p>{selectedClient.thighCm ?? "—"}</p>
+                    </article>
+                  </section>
+                </section>
                 {selectedClient.history?.length ? <GraphWeight data={selectedClient.history} /> : <p>Pas encore de poids enregistres.</p>}
 
                 <section className="section-block">
