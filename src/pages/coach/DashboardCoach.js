@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
 import ChatThread from "../../components/ChatThread";
 import GraphWeight from "../../components/GraphWeight";
@@ -40,6 +40,16 @@ function buildBilan(client, overrides = {}) {
   };
 }
 
+function getNapReferenceLabel(value) {
+  const nap = Number(value);
+  if (!Number.isFinite(nap)) return "Repere NAP: 1.2 sedentaire • 1.35 peu actif • 1.5 modere • 1.7 actif • 1.9 tres actif";
+  if (nap < 1.3) return "Sedentaire (peu de mouvement)";
+  if (nap < 1.45) return "Peu actif";
+  if (nap < 1.65) return "Activite moderee";
+  if (nap < 1.85) return "Actif";
+  return "Tres actif";
+}
+
 function toDateKeyLocal(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -60,6 +70,35 @@ function addMonthsLocal(value, months) {
   const date = monthStartLocal(value);
   date.setMonth(date.getMonth() + months);
   return date;
+}
+
+function mondayOfWeek(value) {
+  const date = value instanceof Date ? new Date(value) : new Date(value || new Date());
+  if (Number.isNaN(date.getTime())) return toDateKeyLocal(new Date());
+  const day = date.getDay();
+  const shift = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + shift);
+  return toDateKeyLocal(date);
+}
+
+function buildMenuWeekOptions(existingMenus, selectedWeek) {
+  const set = new Set();
+  const now = new Date();
+  const currentMonday = mondayOfWeek(now);
+  set.add(currentMonday);
+
+  const cursor = new Date(currentMonday);
+  for (let i = 1; i <= 11; i += 1) {
+    cursor.setDate(cursor.getDate() + 7);
+    set.add(toDateKeyLocal(cursor));
+  }
+
+  (existingMenus || []).forEach((entry) => {
+    if (entry?.weekStart) set.add(entry.weekStart);
+  });
+  if (selectedWeek) set.add(selectedWeek);
+
+  return Array.from(set).sort((a, b) => String(b).localeCompare(String(a)));
 }
 
 function buildMenuSummary(menu) {
@@ -103,6 +142,45 @@ function buildProgressSnapshot(client) {
     goalsDone,
     goalsCount,
     goalsWeek: latestGoals?.weekStart || ""
+  };
+}
+
+function buildMensurationEvolution(client) {
+  const history = Array.isArray(client.mensurationHistory) ? [...client.mensurationHistory] : [];
+  history.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const metrics = [
+    { key: "waistCm", label: "Taille" },
+    { key: "hipCm", label: "Hanches" },
+    { key: "chestCm", label: "Poitrine" },
+    { key: "armCm", label: "Bras" },
+    { key: "thighCm", label: "Cuisse" }
+  ];
+
+  const items = metrics
+    .map((metric) => {
+      const points = history
+        .map((entry) => ({ date: entry.date, value: Number(entry?.[metric.key]) }))
+        .filter((entry) => Number.isFinite(entry.value));
+      if (points.length < 2) return null;
+      const first = points[0];
+      const last = points[points.length - 1];
+      const delta = Number((last.value - first.value).toFixed(1));
+      return {
+        key: metric.key,
+        label: metric.label,
+        start: first.value,
+        end: last.value,
+        delta
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    items,
+    hasData: items.length > 0,
+    summary: items
+      .map((item) => `${item.label} ${item.start} -> ${item.end} cm (${item.delta > 0 ? "+" : ""}${item.delta} cm)`)
+      .join(" | ")
   };
 }
 
@@ -158,6 +236,369 @@ function getCsvField(row, aliases) {
   return "";
 }
 
+const MENU_GENERATOR_OPTIONS = [
+  { key: "economique", label: "Economique" },
+  { key: "vegetarien", label: "Vegetarien" },
+  { key: "vegan", label: "Vegan" },
+  { key: "mediterraneen", label: "Mediterraneen" },
+  { key: "rapide", label: "Rapide" }
+];
+
+const MENU_MODE_PROFILES = {
+  economique: {
+    proteins: [
+      { name: "poulet cuit", p: 31, c: 0, f: 3.6, min: 90, max: 260 },
+      { name: "thon naturel egoutte", p: 26, c: 0, f: 1, min: 90, max: 240 },
+      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 260 },
+      { name: "lentilles cuites", p: 9, c: 20, f: 0.4, min: 120, max: 380 }
+    ],
+    breakfastProteins: [
+      { name: "fromage blanc 0%", p: 8, c: 4, f: 0.2, min: 120, max: 420 },
+      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 240 }
+    ],
+    carbs: [
+      { name: "riz cuit", p: 2.7, c: 28, f: 0.3, min: 90, max: 420 },
+      { name: "pates completes cuites", p: 5.2, c: 30, f: 1.4, min: 90, max: 420 },
+      { name: "pommes de terre cuites", p: 2, c: 18, f: 0.1, min: 120, max: 520 },
+      { name: "flocons d'avoine", p: 13.5, c: 58.7, f: 7, min: 35, max: 130 }
+    ],
+    fats: [
+      { name: "huile d'olive", p: 0, c: 0, f: 100, min: 5, max: 28, step: 1 },
+      { name: "cacahuetes", p: 26, c: 16, f: 49, min: 8, max: 35, step: 1 }
+    ],
+    fruits: ["banane", "pomme", "poire", "orange"],
+    vegetables: ["legumes surgeles melanges", "brocoli", "haricots verts", "courgettes"]
+  },
+  vegetarien: {
+    proteins: [
+      { name: "tofu ferme", p: 14, c: 2, f: 8, min: 120, max: 320 },
+      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 260 },
+      { name: "skyr nature", p: 11, c: 3.5, f: 0.2, min: 140, max: 420 },
+      { name: "lentilles cuites", p: 9, c: 20, f: 0.4, min: 120, max: 380 }
+    ],
+    breakfastProteins: [
+      { name: "skyr nature", p: 11, c: 3.5, f: 0.2, min: 160, max: 420 },
+      { name: "fromage blanc 0%", p: 8, c: 4, f: 0.2, min: 140, max: 420 },
+      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 260 }
+    ],
+    carbs: [
+      { name: "riz cuit", p: 2.7, c: 28, f: 0.3, min: 90, max: 420 },
+      { name: "quinoa cuit", p: 4.4, c: 21, f: 1.9, min: 100, max: 420 },
+      { name: "pates completes cuites", p: 5.2, c: 30, f: 1.4, min: 90, max: 420 },
+      { name: "flocons d'avoine", p: 13.5, c: 58.7, f: 7, min: 35, max: 130 }
+    ],
+    fats: [
+      { name: "huile d'olive", p: 0, c: 0, f: 100, min: 5, max: 28, step: 1 },
+      { name: "amandes", p: 21.1, c: 9.1, f: 49.9, min: 8, max: 35, step: 1 }
+    ],
+    fruits: ["banane", "pomme", "kiwi", "fruits rouges"],
+    vegetables: ["brocoli", "courgettes", "carottes", "haricots verts"]
+  },
+  vegan: {
+    proteins: [
+      { name: "tofu ferme", p: 14, c: 2, f: 8, min: 120, max: 340 },
+      { name: "tempeh", p: 19, c: 9, f: 11, min: 100, max: 280 },
+      { name: "seitan", p: 25, c: 6, f: 2, min: 90, max: 260 },
+      { name: "lentilles cuites", p: 9, c: 20, f: 0.4, min: 140, max: 420 }
+    ],
+    breakfastProteins: [
+      { name: "yaourt soja nature", p: 4, c: 2, f: 2.2, min: 180, max: 500 },
+      { name: "tofu brouille", p: 14, c: 2, f: 8, min: 100, max: 260 }
+    ],
+    carbs: [
+      { name: "riz cuit", p: 2.7, c: 28, f: 0.3, min: 100, max: 450 },
+      { name: "pates completes cuites", p: 5.2, c: 30, f: 1.4, min: 100, max: 450 },
+      { name: "pommes de terre cuites", p: 2, c: 18, f: 0.1, min: 150, max: 560 },
+      { name: "flocons d'avoine", p: 13.5, c: 58.7, f: 7, min: 40, max: 140 }
+    ],
+    fats: [
+      { name: "huile d'olive", p: 0, c: 0, f: 100, min: 6, max: 30, step: 1 },
+      { name: "graines de chia", p: 17, c: 7, f: 31, min: 8, max: 30, step: 1 },
+      { name: "amandes", p: 21.1, c: 9.1, f: 49.9, min: 8, max: 32, step: 1 }
+    ],
+    fruits: ["banane", "pomme", "poire", "mangue"],
+    vegetables: ["brocoli", "epinards", "courgettes", "poivrons"]
+  },
+  mediterraneen: {
+    proteins: [
+      { name: "saumon cuit", p: 20.4, c: 0, f: 13.4, min: 90, max: 220 },
+      { name: "thon naturel egoutte", p: 26, c: 0, f: 1, min: 90, max: 220 },
+      { name: "poulet cuit", p: 31, c: 0, f: 3.6, min: 90, max: 240 },
+      { name: "pois chiches cuits", p: 8.9, c: 27.4, f: 2.6, min: 120, max: 360 }
+    ],
+    breakfastProteins: [
+      { name: "skyr nature", p: 11, c: 3.5, f: 0.2, min: 140, max: 420 },
+      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 240 }
+    ],
+    carbs: [
+      { name: "quinoa cuit", p: 4.4, c: 21, f: 1.9, min: 100, max: 420 },
+      { name: "riz complet cuit", p: 2.7, c: 25.6, f: 1, min: 100, max: 420 },
+      { name: "pommes de terre cuites", p: 2, c: 18, f: 0.1, min: 120, max: 520 },
+      { name: "pain complet", p: 9.5, c: 41.2, f: 3.3, min: 45, max: 220 }
+    ],
+    fats: [
+      { name: "huile d'olive", p: 0, c: 0, f: 100, min: 6, max: 30, step: 1 },
+      { name: "noix", p: 15.2, c: 7, f: 65.2, min: 8, max: 26, step: 1 },
+      { name: "avocat", p: 2, c: 8.5, f: 14.7, min: 40, max: 160, step: 5 }
+    ],
+    fruits: ["orange", "pomme", "kiwi", "fruits rouges"],
+    vegetables: ["tomates", "courgettes", "aubergines", "haricots verts"]
+  },
+  rapide: {
+    proteins: [
+      { name: "poulet cuit", p: 31, c: 0, f: 3.6, min: 90, max: 240 },
+      { name: "thon naturel egoutte", p: 26, c: 0, f: 1, min: 90, max: 220 },
+      { name: "tofu ferme", p: 14, c: 2, f: 8, min: 120, max: 300 },
+      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 240 }
+    ],
+    breakfastProteins: [
+      { name: "skyr nature", p: 11, c: 3.5, f: 0.2, min: 140, max: 420 },
+      { name: "yaourt soja nature", p: 4, c: 2, f: 2.2, min: 180, max: 500 }
+    ],
+    carbs: [
+      { name: "flocons d'avoine", p: 13.5, c: 58.7, f: 7, min: 35, max: 130 },
+      { name: "riz cuisson rapide cuit", p: 2.7, c: 28, f: 0.3, min: 100, max: 420 },
+      { name: "pain complet", p: 9.5, c: 41.2, f: 3.3, min: 45, max: 220 },
+      { name: "pates cuites", p: 5, c: 25, f: 1.1, min: 90, max: 420 }
+    ],
+    fats: [
+      { name: "huile d'olive", p: 0, c: 0, f: 100, min: 5, max: 25, step: 1 },
+      { name: "beurre de cacahuete", p: 25, c: 20, f: 50, min: 8, max: 30, step: 1 }
+    ],
+    fruits: ["banane", "pomme", "orange", "poire"],
+    vegetables: ["salade composee", "legumes surgeles", "tomates", "concombre"]
+  }
+};
+
+const MEAL_MACRO_SPLIT = {
+  breakfast: 0.25,
+  lunch: 0.34,
+  dinner: 0.31,
+  snack: 0.1
+};
+
+function hashStringToSeed(value) {
+  const input = String(value || "");
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash +=
+      (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return (hash >>> 0) || 1;
+}
+
+function createSeededRandom(seedValue) {
+  let state = seedValue >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+function pickRandom(items, random) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return items[Math.floor(random() * items.length)];
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function roundToStep(value, step = 5) {
+  const safeStep = step > 0 ? step : 1;
+  return Math.round(value / safeStep) * safeStep;
+}
+
+function computePortionGrams(targetMacro, macroPer100, min, max, step = 5) {
+  const density = Number(macroPer100);
+  if (!Number.isFinite(density) || density <= 0) {
+    return clamp(roundToStep(min || 0, step), min || 0, max || 0);
+  }
+  const raw = (Math.max(0, Number(targetMacro) || 0) / density) * 100;
+  const bounded = clamp(raw, min, max);
+  return roundToStep(bounded, step);
+}
+
+function computeItemMacros(item, grams) {
+  const ratio = Number(grams || 0) / 100;
+  return {
+    p: (item.p || 0) * ratio,
+    c: (item.c || 0) * ratio,
+    f: (item.f || 0) * ratio
+  };
+}
+
+function formatIngredient(item, grams) {
+  return `${item.name} ${Math.max(0, Math.round(grams))} g`;
+}
+
+function mealTargetsFromDailyMacros(macros) {
+  const protein = Number(macros?.protein || 0);
+  const carbs = Number(macros?.carbs || 0);
+  const fat = Number(macros?.fat || 0);
+  return {
+    breakfast: {
+      p: Math.round(protein * MEAL_MACRO_SPLIT.breakfast),
+      c: Math.round(carbs * MEAL_MACRO_SPLIT.breakfast),
+      f: Math.round(fat * MEAL_MACRO_SPLIT.breakfast)
+    },
+    lunch: {
+      p: Math.round(protein * MEAL_MACRO_SPLIT.lunch),
+      c: Math.round(carbs * MEAL_MACRO_SPLIT.lunch),
+      f: Math.round(fat * MEAL_MACRO_SPLIT.lunch)
+    },
+    dinner: {
+      p: Math.round(protein * MEAL_MACRO_SPLIT.dinner),
+      c: Math.round(carbs * MEAL_MACRO_SPLIT.dinner),
+      f: Math.round(fat * MEAL_MACRO_SPLIT.dinner)
+    },
+    snack: {
+      p: Math.round(protein * MEAL_MACRO_SPLIT.snack),
+      c: Math.round(carbs * MEAL_MACRO_SPLIT.snack),
+      f: Math.round(fat * MEAL_MACRO_SPLIT.snack)
+    }
+  };
+}
+
+function createMainMeal(target, profile, random) {
+  const proteinSource = pickRandom(profile.proteins, random) || profile.proteins[0];
+  const carbSource = pickRandom(profile.carbs, random) || profile.carbs[0];
+  const fatSource = pickRandom(profile.fats, random) || profile.fats[0];
+  const veg = pickRandom(profile.vegetables, random) || "legumes";
+
+  const proteinGrams = computePortionGrams(
+    Math.max(12, target.p * 0.8),
+    proteinSource.p,
+    proteinSource.min,
+    proteinSource.max,
+    proteinSource.step || 5
+  );
+  const carbGrams = computePortionGrams(
+    Math.max(15, target.c * 0.9),
+    carbSource.c,
+    carbSource.min,
+    carbSource.max,
+    carbSource.step || 5
+  );
+  const fatGrams = computePortionGrams(
+    Math.max(4, target.f * 0.85),
+    fatSource.f,
+    fatSource.min,
+    fatSource.max,
+    fatSource.step || 1
+  );
+
+  const proteinMacros = computeItemMacros(proteinSource, proteinGrams);
+  const carbMacros = computeItemMacros(carbSource, carbGrams);
+  const fatMacros = computeItemMacros(fatSource, fatGrams);
+  const total = {
+    p: proteinMacros.p + carbMacros.p + fatMacros.p,
+    c: proteinMacros.c + carbMacros.c + fatMacros.c,
+    f: proteinMacros.f + carbMacros.f + fatMacros.f
+  };
+
+  const gapProtein = target.p - total.p;
+  let proteinTopUpText = "";
+  if (gapProtein > 6) {
+    const topUpSource = profile.breakfastProteins[0] || proteinSource;
+    const topUpGrams = computePortionGrams(
+      gapProtein,
+      topUpSource.p,
+      50,
+      200,
+      5
+    );
+    proteinTopUpText = ` + ${formatIngredient(topUpSource, topUpGrams)}`;
+  }
+
+  return `${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)} + ${veg} 250 g + ${formatIngredient(fatSource, fatGrams)}${proteinTopUpText}`;
+}
+
+function createBreakfast(target, profile, random) {
+  const proteinSource = pickRandom(profile.breakfastProteins, random) || profile.proteins[0];
+  const carbSource = pickRandom(profile.carbs, random) || profile.carbs[0];
+  const fatSource = pickRandom(profile.fats, random) || profile.fats[0];
+  const fruit = pickRandom(profile.fruits, random) || "fruit";
+
+  const proteinGrams = computePortionGrams(
+    Math.max(12, target.p * 0.8),
+    proteinSource.p,
+    proteinSource.min,
+    proteinSource.max,
+    proteinSource.step || 5
+  );
+  const carbGrams = computePortionGrams(
+    Math.max(18, target.c * 0.8),
+    carbSource.c,
+    carbSource.min,
+    carbSource.max,
+    carbSource.step || 5
+  );
+  const fatGrams = computePortionGrams(
+    Math.max(3, target.f * 0.6),
+    fatSource.f,
+    fatSource.min,
+    fatSource.max,
+    fatSource.step || 1
+  );
+
+  return `${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)} + ${formatIngredient(fatSource, fatGrams)} + ${fruit}`;
+}
+
+function createSnack(target, profile, random) {
+  const proteinSource = pickRandom(profile.breakfastProteins, random) || profile.proteins[0];
+  const fatSource = pickRandom(profile.fats, random) || profile.fats[0];
+  const fruit = pickRandom(profile.fruits, random) || "fruit";
+  const proteinGrams = computePortionGrams(
+    Math.max(10, target.p * 0.9),
+    proteinSource.p,
+    proteinSource.min,
+    proteinSource.max,
+    proteinSource.step || 5
+  );
+  const fatGrams = computePortionGrams(
+    Math.max(3, target.f * 0.85),
+    fatSource.f,
+    fatSource.min,
+    fatSource.max,
+    fatSource.step || 1
+  );
+  return `${formatIngredient(proteinSource, proteinGrams)} + ${fruit} + ${formatIngredient(fatSource, fatGrams)}`;
+}
+
+function generateMenuProposal({ clientId, weekStart, mode, variant, macros, calories }) {
+  const normalizedMode = MENU_MODE_PROFILES[mode] ? mode : "economique";
+  const profile = MENU_MODE_PROFILES[normalizedMode];
+  const optionLabel = MENU_GENERATOR_OPTIONS.find((item) => item.key === normalizedMode)?.label || "Economique";
+  const safeMacros = {
+    protein: Math.max(90, Number(macros?.protein || 0)),
+    carbs: Math.max(80, Number(macros?.carbs || 0)),
+    fat: Math.max(30, Number(macros?.fat || 0))
+  };
+  const dailyTargets = mealTargetsFromDailyMacros(safeMacros);
+  const seed = hashStringToSeed(`${clientId}:${weekStart}:${normalizedMode}:${variant}`);
+  const random = createSeededRandom(seed);
+  const plan = createEmptyWeeklyPlan();
+
+  for (const day of DAY_KEYS) {
+    plan[day.key] = {
+      breakfast: createBreakfast(dailyTargets.breakfast, profile, random),
+      lunch: createMainMeal(dailyTargets.lunch, profile, random),
+      dinner: createMainMeal(dailyTargets.dinner, profile, random),
+      snack: createSnack(dailyTargets.snack, profile, random)
+    };
+  }
+
+  const notes =
+    `Menu auto ${optionLabel} (variante ${variant + 1}). ` +
+    `Cible: ${Math.round(Number(calories || 0))} kcal | ` +
+    `P ${safeMacros.protein} g | G ${safeMacros.carbs} g | L ${safeMacros.fat} g. ` +
+    "Ajuster +/-10% les portions selon faim, adherence et evolution du poids.";
+
+  return { plan, notes };
+}
+
 export default function DashboardCoach({
   coach,
   clients,
@@ -172,6 +613,7 @@ export default function DashboardCoach({
   notifications,
   onMarkNotificationRead,
   onDeleteNotification,
+  onOpenNotification,
   onDeletePhoto,
   onUpdateAppointment,
   onCancelAppointment,
@@ -183,13 +625,16 @@ export default function DashboardCoach({
   onMarkChatRead,
   onDeleteChatHistory,
   forcedView,
-  onChangeView
+  onChangeView,
+  forcedClientId
 }) {
   const [deficitByClientId, setDeficitByClientId] = useState({});
   const [napByClientId, setNapByClientId] = useState({});
   const [bmrMethodByClientId, setBmrMethodByClientId] = useState({});
   const [reportDraftByClientId, setReportDraftByClientId] = useState({});
   const [menuDraftByClientId, setMenuDraftByClientId] = useState({});
+  const [menuGeneratorModeByClientId, setMenuGeneratorModeByClientId] = useState({});
+  const [menuGeneratorVariantByClientId, setMenuGeneratorVariantByClientId] = useState({});
   const [appointmentDraftByClientId, setAppointmentDraftByClientId] = useState({});
   const [selectedClientId, setSelectedClientId] = useState("");
   const [activeAppointmentClientId, setActiveAppointmentClientId] = useState("");
@@ -211,6 +656,8 @@ export default function DashboardCoach({
   const [blogCoverFile, setBlogCoverFile] = useState(null);
   const [blogCsvFile, setBlogCsvFile] = useState(null);
   const [blogCsvStatus, setBlogCsvStatus] = useState("");
+  const [saveFeedbackByClientId, setSaveFeedbackByClientId] = useState({});
+  const feedbackTimeoutsRef = useRef({});
 
   const setCoachViewSynced = (nextView) => {
     setCoachView(nextView);
@@ -226,15 +673,65 @@ export default function DashboardCoach({
   }, [forcedView, coachView]);
 
   useEffect(() => {
-    setDeficitByClientId(
-      Object.fromEntries(clients.map((client) => [client.id, client.deficit ?? 20]))
-    );
-    setNapByClientId(
-      Object.fromEntries(clients.map((client) => [client.id, client.nap ?? 1.4]))
-    );
-    setBmrMethodByClientId(
-      Object.fromEntries(clients.map((client) => [client.id, client.bmrMethod || "mifflin"]))
-    );
+    return () => {
+      Object.values(feedbackTimeoutsRef.current).forEach((timeoutId) => clearTimeout(timeoutId));
+      feedbackTimeoutsRef.current = {};
+    };
+  }, []);
+
+  const showSaveFeedback = (clientId, key, message) => {
+    const timeoutKey = `${clientId}:${key}`;
+    if (feedbackTimeoutsRef.current[timeoutKey]) {
+      clearTimeout(feedbackTimeoutsRef.current[timeoutKey]);
+    }
+    setSaveFeedbackByClientId((prev) => ({
+      ...prev,
+      [timeoutKey]: message
+    }));
+    feedbackTimeoutsRef.current[timeoutKey] = setTimeout(() => {
+      setSaveFeedbackByClientId((prev) => {
+        const next = { ...prev };
+        delete next[timeoutKey];
+        return next;
+      });
+      delete feedbackTimeoutsRef.current[timeoutKey];
+    }, 2200);
+  };
+
+  useEffect(() => {
+    if (!forcedClientId) return;
+    if (!clients.some((client) => client.id === forcedClientId)) return;
+    setSelectedClientId(forcedClientId);
+  }, [forcedClientId, clients]);
+
+  useEffect(() => {
+    setDeficitByClientId((prev) => {
+      const next = {};
+      for (const client of clients) {
+        next[client.id] = Object.prototype.hasOwnProperty.call(prev, client.id)
+          ? prev[client.id]
+          : (client.deficit ?? 20);
+      }
+      return next;
+    });
+    setNapByClientId((prev) => {
+      const next = {};
+      for (const client of clients) {
+        next[client.id] = Object.prototype.hasOwnProperty.call(prev, client.id)
+          ? prev[client.id]
+          : (client.nap ?? 1.4);
+      }
+      return next;
+    });
+    setBmrMethodByClientId((prev) => {
+      const next = {};
+      for (const client of clients) {
+        next[client.id] = Object.prototype.hasOwnProperty.call(prev, client.id)
+          ? prev[client.id]
+          : (client.bmrMethod || "mifflin");
+      }
+      return next;
+    });
     setReportDraftByClientId((prev) => {
       const next = { ...prev };
       for (const client of clients) {
@@ -253,26 +750,43 @@ export default function DashboardCoach({
       return next;
     });
 
-    const drafts = Object.fromEntries(
-      clients.map((client) => {
+    setMenuDraftByClientId((prev) => {
+      const next = {};
+      for (const client of clients) {
+        if (prev[client.id]) {
+          // Keep local draft while typing to avoid wiping in-progress edits on realtime refresh.
+          next[client.id] = prev[client.id];
+          continue;
+        }
         const latestMenu = client.weeklyMenus?.[0];
-        return [
-          client.id,
-          latestMenu
-            ? {
-                weekStart: latestMenu.weekStart,
-                notes: latestMenu.notes || "",
-                plan: latestMenu.plan || createEmptyWeeklyPlan()
-              }
-            : {
-                weekStart: getMondayOfCurrentWeek(),
-                notes: "",
-                plan: createEmptyWeeklyPlan()
-              }
-        ];
-      })
-    );
-    setMenuDraftByClientId(drafts);
+        next[client.id] = latestMenu
+          ? {
+              weekStart: latestMenu.weekStart,
+              notes: latestMenu.notes || "",
+              plan: latestMenu.plan || createEmptyWeeklyPlan()
+            }
+          : {
+              weekStart: getMondayOfCurrentWeek(),
+              notes: "",
+              plan: createEmptyWeeklyPlan()
+            };
+      }
+      return next;
+    });
+    setMenuGeneratorModeByClientId((prev) => {
+      const next = {};
+      for (const client of clients) {
+        next[client.id] = prev[client.id] || "economique";
+      }
+      return next;
+    });
+    setMenuGeneratorVariantByClientId((prev) => {
+      const next = {};
+      for (const client of clients) {
+        next[client.id] = Number.isFinite(prev[client.id]) ? prev[client.id] : 0;
+      }
+      return next;
+    });
 
     if (clients.length === 0) {
       setSelectedClientId("");
@@ -329,6 +843,12 @@ export default function DashboardCoach({
     [clientsWithBilan, selectedClientId]
   );
 
+  const selectedClientMenuWeekOptions = useMemo(() => {
+    if (!selectedClient) return [];
+    const draftWeek = menuDraftByClientId[selectedClient.id]?.weekStart;
+    return buildMenuWeekOptions(selectedClient.weeklyMenus, draftWeek);
+  }, [selectedClient, menuDraftByClientId]);
+
   const selectedClientMetabolicPreview = useMemo(() => {
     if (!selectedClient) return null;
     return buildBilan(selectedClient, {
@@ -337,6 +857,11 @@ export default function DashboardCoach({
       bmrMethod: bmrMethodByClientId[selectedClient.id] || selectedClient.bmrMethod || "mifflin"
     });
   }, [selectedClient, napByClientId, deficitByClientId, bmrMethodByClientId]);
+
+  const selectedClientMensurationEvolution = useMemo(() => {
+    if (!selectedClient) return { hasData: false, items: [], summary: "" };
+    return buildMensurationEvolution(selectedClient);
+  }, [selectedClient]);
 
   const selectedClientChatMessages = useMemo(() => {
     if (!selectedClient) return [];
@@ -425,6 +950,7 @@ export default function DashboardCoach({
     const deficit = Number(rawValue);
     if (Number.isNaN(deficit)) return;
     await onUpdateClientPlan(clientId, { deficit });
+    showSaveFeedback(clientId, "deficit", "Deficit enregistre.");
   };
 
   const saveMetabolicProfile = async (clientId) => {
@@ -436,6 +962,7 @@ export default function DashboardCoach({
       nap,
       bmrMethod
     });
+    showSaveFeedback(clientId, "metabolic", "NAP + methode MB enregistres.");
   };
 
   const createReport = async (client) => {
@@ -446,6 +973,7 @@ export default function DashboardCoach({
     const bilan = buildBilan(client);
     const menuSummary = buildMenuSummary(menuDraftByClientId[client.id] || client.weeklyMenus?.[0] || null);
     const progress = buildProgressSnapshot(client);
+    const mensurationsEvolution = buildMensurationEvolution(client);
     const mensurations = {
       waistCm: client.waistCm ?? null,
       hipCm: client.hipCm ?? null,
@@ -458,6 +986,7 @@ export default function DashboardCoach({
       sessionNotes,
       objectives,
       mensurations,
+      mensurationsEvolution,
       menuSummary,
       progress
     };
@@ -516,6 +1045,9 @@ export default function DashboardCoach({
         mensurations.chestCm ?? "-"
       } | Bras ${mensurations.armCm ?? "-"} | Cuisse ${mensurations.thighCm ?? "-"}`
     );
+    if (mensurationsEvolution.hasData) {
+      writeWrapped("Evolution mensurations", mensurationsEvolution.summary);
+    }
     doc.save(`bilan-coach-${client.name}.pdf`);
 
     setReportDraftByClientId((prev) => ({
@@ -561,6 +1093,46 @@ export default function DashboardCoach({
         }
       }
     }));
+  };
+
+  const buildBilanWithCurrentSettings = (client) =>
+    buildBilan(client, {
+      nap: napByClientId[client.id] ?? client.nap ?? 1.4,
+      deficit: deficitByClientId[client.id] ?? client.deficit ?? 20,
+      bmrMethod: bmrMethodByClientId[client.id] || client.bmrMethod || "mifflin"
+    });
+
+  const applyGeneratedMenu = (client, nextVariant) => {
+    const draft = menuDraftByClientId[client.id];
+    const weekStart = draft?.weekStart || getMondayOfCurrentWeek();
+    const mode = menuGeneratorModeByClientId[client.id] || "economique";
+    const bilan = buildBilanWithCurrentSettings(client);
+    const generated = generateMenuProposal({
+      clientId: client.id,
+      weekStart,
+      mode,
+      variant: nextVariant,
+      macros: bilan.macros,
+      calories: bilan.deficitCalories
+    });
+    setMenuDraft(client.id, (currentDraft) => ({
+      ...currentDraft,
+      weekStart,
+      plan: generated.plan,
+      notes: generated.notes
+    }));
+    showSaveFeedback(client.id, "menuGen", `Proposition ${nextVariant + 1} appliquee.`);
+  };
+
+  const generateMenuForClient = (client) => {
+    const currentVariant = menuGeneratorVariantByClientId[client.id] || 0;
+    applyGeneratedMenu(client, currentVariant);
+  };
+
+  const generateAlternativeMenuForClient = (client) => {
+    const nextVariant = (menuGeneratorVariantByClientId[client.id] || 0) + 1;
+    setMenuGeneratorVariantByClientId((prev) => ({ ...prev, [client.id]: nextVariant }));
+    applyGeneratedMenu(client, nextVariant);
   };
 
   const saveWeeklyMenuForClient = async (client) => {
@@ -708,10 +1280,14 @@ export default function DashboardCoach({
   };
 
   const saveCurrentBlogPost = async () => {
+    const normalizedExcerpt = String(blogDraft.excerpt || "").trim();
+    const normalizedContent = String(blogDraft.content || "").trim();
+    const autoExcerpt = normalizedContent ? normalizedContent.slice(0, 180) : "";
     const baseSlug = blogDraft.slug || slugify(blogDraft.title);
     const slug = blogDraft.id ? baseSlug : `${baseSlug || "article"}-${Date.now().toString().slice(-6)}`;
     const saved = await onSaveBlogPost({
       ...blogDraft,
+      excerpt: normalizedExcerpt || autoExcerpt,
       slug
     });
     if (saved) {
@@ -725,11 +1301,17 @@ export default function DashboardCoach({
   };
 
   const removeCurrentBlogPost = async () => {
-    if (!blogDraft.id) return;
+    await removeBlogPostById(blogDraft.id);
+  };
+
+  const removeBlogPostById = async (postId) => {
+    if (!postId) return;
     const ok = window.confirm("Supprimer cet article ?");
     if (!ok) return;
-    await onDeleteBlogPost(blogDraft.id);
-    createNewBlogDraft();
+    await onDeleteBlogPost(postId);
+    if (blogDraft.id === postId) {
+      createNewBlogDraft();
+    }
   };
 
   const uploadCover = async () => {
@@ -755,42 +1337,43 @@ export default function DashboardCoach({
         busy={busy}
         onMarkRead={onMarkNotificationRead}
         onDelete={onDeleteNotification}
+        onOpen={onOpenNotification}
         title="Notifications coach"
       />
 
-      {coachView === "clients" ? (
-        <section className="coach-kpis">
-          <article className="panel coach-kpi">
-            <small>Clients actifs</small>
-            <p>{clientsWithBilan.length}</p>
-          </article>
-          <article className="panel coach-kpi">
-            <small>Articles blog</small>
-            <p>{(blogPosts || []).length}</p>
-          </article>
-          <article className="panel coach-kpi">
-            <small>Clients archives</small>
-            <p>{(archivedClients || []).length}</p>
-          </article>
-        </section>
-      ) : null}
-
       {clientsWithBilan.length > 0 ? (
         <section className="panel coach-client-picker">
-          <label>
-            Client selectionne
-            <select
-              value={selectedClientId}
-              onChange={(event) => setSelectedClientId(event.target.value)}
-              disabled={busy}
-            >
-              {clientsWithBilan.map((client) => (
-                <option key={`pick-${client.id}`} value={client.id}>
-                  {client.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="coach-client-picker-row">
+            <label>
+              Client selectionne
+              <select
+                value={selectedClientId}
+                onChange={(event) => setSelectedClientId(event.target.value)}
+                disabled={busy}
+              >
+                {clientsWithBilan.map((client) => (
+                  <option key={`pick-${client.id}`} value={client.id}>
+                    {client.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {coachView === "clients" ? (
+              <div className="coach-kpis-compact-line">
+                <span>
+                  <strong>{clientsWithBilan.length}</strong> clients actifs
+                </span>
+                <span className="coach-kpi-sep">•</span>
+                <span>
+                  <strong>{(blogPosts || []).length}</strong> articles blog
+                </span>
+                <span className="coach-kpi-sep">•</span>
+                <span>
+                  <strong>{(archivedClients || []).length}</strong> archives
+                </span>
+              </div>
+            ) : null}
+          </div>
         </section>
       ) : null}
 
@@ -807,6 +1390,192 @@ export default function DashboardCoach({
                   Archiver + Supprimer
                 </button>
               </div>
+
+              <section className="section-block">
+                <h4>Nutrition</h4>
+                {selectedClientMetabolicPreview ? (
+                  <section className="metric-grid">
+                    <article>
+                      <small>Poids actuel</small>
+                      <p>{selectedClient.weight ? `${Number(selectedClient.weight).toFixed(1)} kg` : "—"}</p>
+                    </article>
+                    <article>
+                      <small>Age</small>
+                      <p>{selectedClient.age ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Taille (cm)</small>
+                      <p>{selectedClient.height ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>IMC</small>
+                      <p>{selectedClientMetabolicPreview.bmi ? `${selectedClientMetabolicPreview.bmi}` : "—"}</p>
+                    </article>
+                    <article>
+                      <small>NAP</small>
+                      <p>{selectedClientMetabolicPreview.nap}</p>
+                    </article>
+                    <article>
+                      <small>BMR ({getBmrMethodLabel(selectedClientMetabolicPreview.bmrMethod)})</small>
+                      <p>{selectedClientMetabolicPreview.bmr} kcal</p>
+                    </article>
+                    <article>
+                      <small>TDEE</small>
+                      <p>{selectedClientMetabolicPreview.tdee} kcal</p>
+                    </article>
+                    <article>
+                      <small>Cible avec deficit ({selectedClientMetabolicPreview.deficitPercentage}%)</small>
+                      <p>{selectedClientMetabolicPreview.deficitCalories} kcal</p>
+                    </article>
+                    <article>
+                      <small>Proteines</small>
+                      <p>{selectedClientMetabolicPreview.macros.protein} g</p>
+                    </article>
+                    <article>
+                      <small>Lipides</small>
+                      <p>{selectedClientMetabolicPreview.macros.fat} g</p>
+                    </article>
+                    <article>
+                      <small>Glucides</small>
+                      <p>{selectedClientMetabolicPreview.macros.carbs} g</p>
+                    </article>
+                    <article>
+                      <small>Tour de taille (cm)</small>
+                      <p>{selectedClient.waistCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Hanches (cm)</small>
+                      <p>{selectedClient.hipCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Poitrine (cm)</small>
+                      <p>{selectedClient.chestCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Bras (cm)</small>
+                      <p>{selectedClient.armCm ?? "—"}</p>
+                    </article>
+                    <article>
+                      <small>Cuisse (cm)</small>
+                      <p>{selectedClient.thighCm ?? "—"}</p>
+                    </article>
+                  </section>
+                ) : null}
+                <p className="info-text">
+                  {selectedClientMensurationEvolution.hasData
+                    ? `Evolution mensurations: ${selectedClientMensurationEvolution.summary}`
+                    : "Evolution mensurations: renseigne les mensurations sur plusieurs dates pour voir le delta."}
+                </p>
+
+                <section className="coach-progress-layout">
+                  <section className="section-block">
+                    <h4>Courbe de poids</h4>
+                    {selectedClient.history?.length ? <GraphWeight data={selectedClient.history} /> : <p>Pas encore de poids enregistres.</p>}
+                  </section>
+
+                  <section className="section-block coach-metabolic-panel">
+                    <h4>Deficit / NAP / MB</h4>
+                    <label>
+                      Deficit calorique (%)
+                      <input
+                        type="number"
+                        min="5"
+                        max="40"
+                        value={deficitByClientId[selectedClient.id] ?? 20}
+                        onChange={(event) =>
+                          setDeficitByClientId((prev) => ({
+                            ...prev,
+                            [selectedClient.id]: event.target.value
+                          }))
+                        }
+                        disabled={busy}
+                      />
+                    </label>
+                    <button className="ghost" type="button" disabled={busy} onClick={() => saveDeficit(selectedClient.id)}>
+                      Enregistrer deficit
+                    </button>
+                    {saveFeedbackByClientId[`${selectedClient.id}:deficit`] ? (
+                      <p className="info-text">{saveFeedbackByClientId[`${selectedClient.id}:deficit`]}</p>
+                    ) : null}
+
+                    <section className="section-inline-grid">
+                      <label>
+                        NAP du client
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="1.2"
+                          max="2.2"
+                          value={napByClientId[selectedClient.id] ?? 1.4}
+                          onChange={(event) =>
+                            setNapByClientId((prev) => ({
+                              ...prev,
+                              [selectedClient.id]: event.target.value
+                            }))
+                          }
+                          disabled={busy}
+                        />
+                        <p className="info-text">Repere: {getNapReferenceLabel(napByClientId[selectedClient.id])}</p>
+                      </label>
+
+                      <label>
+                        Methode de calcul MB
+                        <select
+                          value={bmrMethodByClientId[selectedClient.id] || "mifflin"}
+                          onChange={(event) =>
+                            setBmrMethodByClientId((prev) => ({
+                              ...prev,
+                              [selectedClient.id]: event.target.value
+                            }))
+                          }
+                          disabled={busy}
+                        >
+                          {BMR_METHODS.map((method) => (
+                            <option key={method.value} value={method.value}>
+                              {method.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </section>
+                    <button className="ghost" type="button" disabled={busy} onClick={() => saveMetabolicProfile(selectedClient.id)}>
+                      Enregistrer NAP + methode MB
+                    </button>
+                    {saveFeedbackByClientId[`${selectedClient.id}:metabolic`] ? (
+                      <p className="info-text">{saveFeedbackByClientId[`${selectedClient.id}:metabolic`]}</p>
+                    ) : null}
+                  </section>
+                </section>
+              </section>
+
+              <section className="section-block">
+                <h4>Photos du client</h4>
+                {selectedClient.photos?.length ? null : <p>Aucune photo recue.</p>}
+                <div className="photo-grid">
+                  {(selectedClient.photos || []).map((photo) => (
+                    <figure key={photo.id} className="photo-card">
+                      <img
+                        src={photo.imageUrl}
+                        alt={`Progression de ${selectedClient.name}`}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                      <figcaption>
+                        <small>{new Date(photo.createdAt).toLocaleDateString()}</small>
+                        {photo.caption ? <p>{photo.caption}</p> : null}
+                        <button
+                          className="danger"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => onDeletePhoto(photo.id)}
+                        >
+                          Supprimer
+                        </button>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </section>
 
               <section className="section-block">
                 <h4>Bilan de seance</h4>
@@ -848,158 +1617,6 @@ export default function DashboardCoach({
                   Enregistrer et generer bilan PDF
                 </button>
               </section>
-
-              <section className="section-block">
-                <h4>Nutrition</h4>
-                {selectedClientMetabolicPreview ? (
-                  <section className="metric-grid">
-                    <article>
-                      <small>Poids actuel</small>
-                      <p>{selectedClient.weight ? `${Number(selectedClient.weight).toFixed(1)} kg` : "—"}</p>
-                    </article>
-                    <article>
-                      <small>IMC</small>
-                      <p>{selectedClientMetabolicPreview.bmi ? `${selectedClientMetabolicPreview.bmi}` : "—"}</p>
-                    </article>
-                    <article>
-                      <small>NAP</small>
-                      <p>{selectedClientMetabolicPreview.nap}</p>
-                    </article>
-                    <article>
-                      <small>BMR ({getBmrMethodLabel(selectedClientMetabolicPreview.bmrMethod)})</small>
-                      <p>{selectedClientMetabolicPreview.bmr} kcal</p>
-                    </article>
-                    <article>
-                      <small>TDEE</small>
-                      <p>{selectedClientMetabolicPreview.tdee} kcal</p>
-                    </article>
-                    <article>
-                      <small>Cible avec deficit ({selectedClientMetabolicPreview.deficitPercentage}%)</small>
-                      <p>{selectedClientMetabolicPreview.deficitCalories} kcal</p>
-                    </article>
-                  </section>
-                ) : null}
-                <section className="section-block">
-                  <h4>Mensurations (cm)</h4>
-                  <section className="metric-grid">
-                    <article>
-                      <small>Taille</small>
-                      <p>{selectedClient.waistCm ?? "—"}</p>
-                    </article>
-                    <article>
-                      <small>Hanches</small>
-                      <p>{selectedClient.hipCm ?? "—"}</p>
-                    </article>
-                    <article>
-                      <small>Poitrine</small>
-                      <p>{selectedClient.chestCm ?? "—"}</p>
-                    </article>
-                    <article>
-                      <small>Bras</small>
-                      <p>{selectedClient.armCm ?? "—"}</p>
-                    </article>
-                    <article>
-                      <small>Cuisse</small>
-                      <p>{selectedClient.thighCm ?? "—"}</p>
-                    </article>
-                  </section>
-                </section>
-                {selectedClient.history?.length ? <GraphWeight data={selectedClient.history} /> : <p>Pas encore de poids enregistres.</p>}
-
-                <section className="section-block">
-                  <label>
-                    Deficit calorique (%)
-                    <input
-                      type="number"
-                      min="5"
-                      max="40"
-                      value={deficitByClientId[selectedClient.id] ?? 20}
-                      onChange={(event) =>
-                        setDeficitByClientId((prev) => ({
-                          ...prev,
-                          [selectedClient.id]: event.target.value
-                        }))
-                      }
-                      disabled={busy}
-                    />
-                  </label>
-                  <button className="ghost" type="button" disabled={busy} onClick={() => saveDeficit(selectedClient.id)}>
-                    Enregistrer deficit
-                  </button>
-                </section>
-
-                <section className="section-block section-inline-grid">
-                  <label>
-                    NAP du client
-                    <input
-                      type="number"
-                      step="0.05"
-                      min="1.2"
-                      max="2.2"
-                      value={napByClientId[selectedClient.id] ?? 1.4}
-                      onChange={(event) =>
-                        setNapByClientId((prev) => ({
-                          ...prev,
-                          [selectedClient.id]: event.target.value
-                        }))
-                      }
-                      disabled={busy}
-                    />
-                  </label>
-
-                  <label>
-                    Methode de calcul MB
-                    <select
-                      value={bmrMethodByClientId[selectedClient.id] || "mifflin"}
-                      onChange={(event) =>
-                        setBmrMethodByClientId((prev) => ({
-                          ...prev,
-                          [selectedClient.id]: event.target.value
-                        }))
-                      }
-                      disabled={busy}
-                    >
-                      {BMR_METHODS.map((method) => (
-                        <option key={method.value} value={method.value}>
-                          {method.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button className="ghost" type="button" disabled={busy} onClick={() => saveMetabolicProfile(selectedClient.id)}>
-                    Enregistrer NAP + methode MB
-                  </button>
-                </section>
-              </section>
-
-              <section className="section-block">
-                <h4>Photos du client</h4>
-                {selectedClient.photos?.length ? null : <p>Aucune photo recue.</p>}
-                <div className="photo-grid">
-                  {(selectedClient.photos || []).map((photo) => (
-                    <figure key={photo.id} className="photo-card">
-                      <img
-                        src={photo.imageUrl}
-                        alt={`Progression de ${selectedClient.name}`}
-                        loading="lazy"
-                        decoding="async"
-                      />
-                      <figcaption>
-                        <small>{new Date(photo.createdAt).toLocaleDateString()}</small>
-                        {photo.caption ? <p>{photo.caption}</p> : null}
-                        <button
-                          className="danger"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => onDeletePhoto(photo.id)}
-                        >
-                          Supprimer
-                        </button>
-                      </figcaption>
-                    </figure>
-                  ))}
-                </div>
-              </section>
             </>
           ) : (
             <section className="section-block">
@@ -1025,14 +1642,22 @@ export default function DashboardCoach({
             <section className="section-block">
               <div className="row-between">
                 <h4>Menu de {selectedClient.name}</h4>
-                <input
-                  type="date"
-                  value={menuDraftByClientId[selectedClient.id]?.weekStart || getMondayOfCurrentWeek()}
-                  onChange={(event) =>
-                    setMenuDraft(selectedClient.id, (draft) => ({ ...draft, weekStart: event.target.value }))
-                  }
-                  disabled={busy}
-                />
+                <div className="row-actions">
+                  <select
+                    className="menu-week-select"
+                    value={menuDraftByClientId[selectedClient.id]?.weekStart || getMondayOfCurrentWeek()}
+                    onChange={(event) =>
+                      setMenuDraft(selectedClient.id, (draft) => ({ ...draft, weekStart: event.target.value }))
+                    }
+                    disabled={busy}
+                  >
+                    {selectedClientMenuWeekOptions.map((weekStart) => (
+                      <option key={`coach-week-${weekStart}`} value={weekStart}>
+                        Semaine du {weekStart}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <label>
@@ -1045,6 +1670,52 @@ export default function DashboardCoach({
                   placeholder="Consignes generales de la semaine"
                 />
               </label>
+
+              <div className="row-actions">
+                <label>
+                  Categorie
+                  <select
+                    value={menuGeneratorModeByClientId[selectedClient.id] || "economique"}
+                    onChange={(event) => {
+                      const mode = event.target.value;
+                      setMenuGeneratorModeByClientId((prev) => ({
+                        ...prev,
+                        [selectedClient.id]: mode
+                      }));
+                      setMenuGeneratorVariantByClientId((prev) => ({
+                        ...prev,
+                        [selectedClient.id]: 0
+                      }));
+                    }}
+                    disabled={busy}
+                  >
+                    {MENU_GENERATOR_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="ghost"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => generateMenuForClient(selectedClient)}
+                >
+                  Generer menu auto
+                </button>
+                <button
+                  className="ghost"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => generateAlternativeMenuForClient(selectedClient)}
+                >
+                  Autre proposition
+                </button>
+              </div>
+              {saveFeedbackByClientId[`${selectedClient.id}:menuGen`] ? (
+                <p className="info-text">{saveFeedbackByClientId[`${selectedClient.id}:menuGen`]}</p>
+              ) : null}
 
               <div className="menu-days-stack">
                 {DAY_KEYS.map((day) => (
@@ -1116,19 +1787,35 @@ export default function DashboardCoach({
             <h4>Articles</h4>
             <div className="client-card-grid">
               {(blogPosts || []).map((post) => (
-                <button
-                  key={post.id}
-                  type="button"
-                  className={`client-mini-card ${blogDraft.id === post.id ? "is-active" : ""}`}
-                  onClick={() => loadBlogPost(post)}
-                >
-                  <strong>{post.title}</strong>
-                </button>
+                <div key={post.id} className={`client-mini-card blog-list-item ${blogDraft.id === post.id ? "is-active" : ""}`}>
+                  <button
+                    type="button"
+                    className="blog-list-main"
+                    onClick={() => loadBlogPost(post)}
+                    disabled={busy}
+                  >
+                    <strong>{post.title}</strong>
+                    <small>{post.isPublished ? "Publie" : "Brouillon"}</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="blog-delete-cross"
+                    aria-label={`Supprimer ${post.title}`}
+                    onClick={() => removeBlogPostById(post.id)}
+                    disabled={busy}
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
             </div>
           </aside>
 
-          <section className="section-block">
+          <section className="section-block blog-editor">
+            <div className="blog-list-header">
+              <strong>{blogDraft.id ? "Modifier l'article" : "Nouvel article"}</strong>
+              <small>Champs essentiels d'abord, options avancees en bas.</small>
+            </div>
             <label>
               Titre
               <input
@@ -1141,98 +1828,34 @@ export default function DashboardCoach({
                     slug: prev.id ? prev.slug : slugify(event.target.value)
                   }))
                 }
+                placeholder="Ex: 5 astuces pour mieux gerer ses collations"
                 disabled={busy}
               />
             </label>
-            <label>
-              Slug
-              <input
-                type="text"
-                value={blogDraft.slug}
-                onChange={(event) => setBlogDraft((prev) => ({ ...prev, slug: slugify(event.target.value) }))}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              Categorie
-              <select
-                value={blogDraft.category}
-                onChange={(event) => setBlogDraft((prev) => ({ ...prev, category: event.target.value }))}
-                disabled={busy}
-              >
-                <option value="Astuces">Astuces</option>
-                <option value="Recettes">Recettes</option>
-                <option value="Sport">Sport</option>
-              </select>
-            </label>
-            <label>
-              Temps de lecture (min)
-              <input
-                type="number"
-                min="1"
-                max="60"
-                value={blogDraft.readMinutes}
-                onChange={(event) => setBlogDraft((prev) => ({ ...prev, readMinutes: Number(event.target.value) || 4 }))}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              Resume
-              <textarea
-                value={blogDraft.excerpt}
-                onChange={(event) => setBlogDraft((prev) => ({ ...prev, excerpt: event.target.value }))}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              Contenu
-              <textarea
-                value={blogDraft.content}
-                onChange={(event) => setBlogDraft((prev) => ({ ...prev, content: event.target.value }))}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              Image de couverture (URL)
-              <input
-                type="url"
-                value={blogDraft.coverImageUrl}
-                onChange={(event) => setBlogDraft((prev) => ({ ...prev, coverImageUrl: event.target.value }))}
-                placeholder="https://..."
-                disabled={busy}
-              />
-            </label>
-            {blogDraft.coverImageUrl ? (
-              <img
-                className="blog-cover-preview"
-                src={blogDraft.coverImageUrl}
-                alt="Couverture article"
-                loading="lazy"
-                decoding="async"
-              />
-            ) : null}
-            <label>
-              Ou upload une image
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                onChange={(event) => setBlogCoverFile(event.target.files?.[0] || null)}
-                disabled={busy}
-              />
-            </label>
-            <div className="row-actions">
-              <button className="ghost" type="button" disabled={busy || !blogCoverFile} onClick={uploadCover}>
-                Upload image
-              </button>
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={(event) => setBlogCsvFile(event.target.files?.[0] || null)}
-                disabled={busy}
-              />
-              <button className="ghost" type="button" disabled={busy || !blogCsvFile} onClick={importBlogCsv}>
-                Import CSV
-              </button>
+            <div className="blog-form-grid">
+              <label>
+                Categorie
+                <select
+                  value={blogDraft.category}
+                  onChange={(event) => setBlogDraft((prev) => ({ ...prev, category: event.target.value }))}
+                  disabled={busy}
+                >
+                  <option value="Astuces">Astuces</option>
+                  <option value="Recettes">Recettes</option>
+                  <option value="Sport">Sport</option>
+                </select>
+              </label>
+              <label>
+                Temps de lecture (min)
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  value={blogDraft.readMinutes}
+                  onChange={(event) => setBlogDraft((prev) => ({ ...prev, readMinutes: Number(event.target.value) || 4 }))}
+                  disabled={busy}
+                />
+              </label>
               <label className="goal-toggle">
                 <input
                   type="checkbox"
@@ -1243,6 +1866,80 @@ export default function DashboardCoach({
                 <span>Publie</span>
               </label>
             </div>
+            <label>
+              Contenu
+              <textarea
+                value={blogDraft.content}
+                onChange={(event) => setBlogDraft((prev) => ({ ...prev, content: event.target.value }))}
+                disabled={busy}
+                rows={10}
+                placeholder="Ecris ici ton article..."
+              />
+            </label>
+            <label>
+              Resume (optionnel)
+              <textarea
+                value={blogDraft.excerpt}
+                onChange={(event) => setBlogDraft((prev) => ({ ...prev, excerpt: event.target.value }))}
+                disabled={busy}
+                rows={3}
+                placeholder="Si vide, un resume automatique sera genere."
+              />
+            </label>
+            <details className="blog-advanced">
+              <summary>Options avancees</summary>
+              <label>
+                Slug
+                <input
+                  type="text"
+                  value={blogDraft.slug}
+                  onChange={(event) => setBlogDraft((prev) => ({ ...prev, slug: slugify(event.target.value) }))}
+                  disabled={busy}
+                />
+              </label>
+              <label>
+                Image de couverture (URL)
+                <input
+                  type="url"
+                  value={blogDraft.coverImageUrl}
+                  onChange={(event) => setBlogDraft((prev) => ({ ...prev, coverImageUrl: event.target.value }))}
+                  placeholder="https://..."
+                  disabled={busy}
+                />
+              </label>
+              <label>
+                Ou upload une image
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) => setBlogCoverFile(event.target.files?.[0] || null)}
+                  disabled={busy}
+                />
+              </label>
+              <div className="row-actions">
+                <button className="ghost" type="button" disabled={busy || !blogCoverFile} onClick={uploadCover}>
+                  Upload image
+                </button>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => setBlogCsvFile(event.target.files?.[0] || null)}
+                  disabled={busy}
+                />
+                <button className="ghost" type="button" disabled={busy || !blogCsvFile} onClick={importBlogCsv}>
+                  Import CSV
+                </button>
+              </div>
+            </details>
+            {blogDraft.coverImageUrl ? (
+              <img
+                className="blog-cover-preview"
+                src={blogDraft.coverImageUrl}
+                alt="Couverture article"
+                loading="lazy"
+                decoding="async"
+              />
+            ) : null}
             {blogCsvStatus ? <p className="muted">{blogCsvStatus}</p> : null}
             <div className="row-actions">
               <button className="primary" type="button" disabled={busy} onClick={saveCurrentBlogPost}>
