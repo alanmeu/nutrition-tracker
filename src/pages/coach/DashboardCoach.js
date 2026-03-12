@@ -236,6 +236,78 @@ function getCsvField(row, aliases) {
   return "";
 }
 
+function normalizeCsvDayKey(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+  const map = {
+    monday: "monday",
+    lundi: "monday",
+    tuesday: "tuesday",
+    mardi: "tuesday",
+    wednesday: "wednesday",
+    mercredi: "wednesday",
+    thursday: "thursday",
+    jeudi: "thursday",
+    friday: "friday",
+    vendredi: "friday",
+    saturday: "saturday",
+    samedi: "saturday",
+    sunday: "sunday",
+    dimanche: "sunday"
+  };
+  return map[normalized] || "";
+}
+
+function parseMenuCsvToWeeklyPlan(text) {
+  const rows = parseCsvText(text);
+  if (!rows.length) {
+    return { ok: false, error: "CSV vide ou invalide." };
+  }
+
+  const plan = createEmptyWeeklyPlan();
+  let filled = 0;
+
+  for (const row of rows) {
+    const dayRaw = getCsvField(row, ["day", "jour"]);
+    const dayKey = normalizeCsvDayKey(dayRaw);
+    if (!dayKey) continue;
+
+    const breakfast = getCsvField(row, ["breakfast", "petit_dejeuner", "petit-dejeuner", "petitdej"]);
+    const lunch = getCsvField(row, ["lunch", "dejeuner", "dej"]);
+    const dinner = getCsvField(row, ["dinner", "diner", "souper"]);
+    const snack = getCsvField(row, ["snack", "collation"]);
+
+    if (breakfast) {
+      plan[dayKey].breakfast = breakfast;
+      filled += 1;
+    }
+    if (lunch) {
+      plan[dayKey].lunch = lunch;
+      filled += 1;
+    }
+    if (dinner) {
+      plan[dayKey].dinner = dinner;
+      filled += 1;
+    }
+    if (snack) {
+      plan[dayKey].snack = snack;
+      filled += 1;
+    }
+  }
+
+  if (filled === 0) {
+    return {
+      ok: false,
+      error: "Aucune ligne valide. Colonnes attendues: day,breakfast,lunch,dinner,snack"
+    };
+  }
+
+  return { ok: true, plan, filled };
+}
+
 const MENU_GENERATOR_OPTIONS = [
   { key: "economique", label: "Economique" },
   { key: "vegetarien", label: "Vegetarien" },
@@ -367,6 +439,77 @@ const MENU_MODE_PROFILES = {
   }
 };
 
+const MENU_MEAL_TEMPLATES = {
+  economique: {
+    breakfast: [
+      { proteinPool: "breakfastProteins", protein: "fromage blanc 0%", carb: "flocons d'avoine", fat: "cacahuetes", title: "Bol proteine" }
+    ],
+    main: [
+      { protein: "poulet cuit", carb: "riz cuit", fat: "huile d'olive", veg: "poelee de legumes surgeles" },
+      { protein: "thon naturel egoutte", carb: "pommes de terre cuites", fat: "huile d'olive", veg: "haricots verts" },
+      { protein: "lentilles cuites", carb: "riz cuit", fat: "huile d'olive", veg: "ratatouille maison" }
+    ],
+    snack: [
+      { proteinPool: "breakfastProteins", protein: "fromage blanc 0%", fat: "cacahuetes", title: "Collation simple" }
+    ]
+  },
+  vegetarien: {
+    breakfast: [
+      { proteinPool: "breakfastProteins", protein: "skyr nature", carb: "flocons d'avoine", fat: "amandes", title: "Bol skyr" },
+      { proteinPool: "breakfastProteins", protein: "fromage blanc 0%", carb: "flocons d'avoine", fat: "amandes", title: "Bol fromage blanc" }
+    ],
+    main: [
+      { protein: "tofu ferme", carb: "riz cuit", fat: "huile d'olive", veg: "courgettes poelees" },
+      { protein: "oeufs entiers", carb: "pates completes cuites", fat: "huile d'olive", veg: "brocoli vapeur" },
+      { protein: "lentilles cuites", carb: "quinoa cuit", fat: "huile d'olive", veg: "carottes vapeur" }
+    ],
+    snack: [
+      { proteinPool: "breakfastProteins", protein: "skyr nature", fat: "amandes", title: "Collation proteinee" }
+    ]
+  },
+  vegan: {
+    breakfast: [
+      { proteinPool: "breakfastProteins", protein: "yaourt soja nature", carb: "flocons d'avoine", fat: "graines de chia", title: "Bol soja" },
+      { proteinPool: "breakfastProteins", protein: "tofu brouille", carb: "pommes de terre cuites", fat: "huile d'olive", title: "Tofu brouille" }
+    ],
+    main: [
+      { protein: "tofu ferme", carb: "riz cuit", fat: "huile d'olive", veg: "brocoli vapeur" },
+      { protein: "tempeh", carb: "pates completes cuites", fat: "huile d'olive", veg: "epinards poeles" },
+      { protein: "lentilles cuites", carb: "pommes de terre cuites", fat: "huile d'olive", veg: "poelee poivrons oignons" }
+    ],
+    snack: [
+      { proteinPool: "breakfastProteins", protein: "yaourt soja nature", fat: "amandes", title: "Collation vegan" }
+    ]
+  },
+  mediterraneen: {
+    breakfast: [
+      { proteinPool: "breakfastProteins", protein: "skyr nature", carb: "pain complet", fat: "noix", title: "Tartine + skyr" }
+    ],
+    main: [
+      { protein: "saumon cuit", carb: "quinoa cuit", fat: "huile d'olive", veg: "legumes grilles" },
+      { protein: "poulet cuit", carb: "pommes de terre cuites", fat: "huile d'olive", veg: "ratatouille" },
+      { protein: "pois chiches cuits", carb: "riz complet cuit", fat: "huile d'olive", veg: "haricots verts" }
+    ],
+    snack: [
+      { proteinPool: "breakfastProteins", protein: "skyr nature", fat: "noix", title: "Collation mediterraneenne" }
+    ]
+  },
+  rapide: {
+    breakfast: [
+      { proteinPool: "breakfastProteins", protein: "skyr nature", carb: "flocons d'avoine", fat: "beurre de cacahuete", title: "Overnight bowl" },
+      { proteinPool: "breakfastProteins", protein: "yaourt soja nature", carb: "flocons d'avoine", fat: "beurre de cacahuete", title: "Bol express" }
+    ],
+    main: [
+      { protein: "poulet cuit", carb: "riz cuisson rapide cuit", fat: "huile d'olive", veg: "poelee de legumes surgeles" },
+      { protein: "thon naturel egoutte", carb: "pates cuites", fat: "huile d'olive", veg: "salade composee" },
+      { protein: "tofu ferme", carb: "riz cuisson rapide cuit", fat: "huile d'olive", veg: "wok de legumes" }
+    ],
+    snack: [
+      { proteinPool: "breakfastProteins", protein: "skyr nature", fat: "beurre de cacahuete", title: "Collation express" }
+    ]
+  }
+};
+
 const MEAL_MACRO_SPLIT = {
   breakfast: 0.25,
   lunch: 0.34,
@@ -417,15 +560,6 @@ function computePortionGrams(targetMacro, macroPer100, min, max, step = 5) {
   return roundToStep(bounded, step);
 }
 
-function computeItemMacros(item, grams) {
-  const ratio = Number(grams || 0) / 100;
-  return {
-    p: (item.p || 0) * ratio,
-    c: (item.c || 0) * ratio,
-    f: (item.f || 0) * ratio
-  };
-}
-
 function formatIngredient(item, grams) {
   return `${item.name} ${Math.max(0, Math.round(grams))} g`;
 }
@@ -458,117 +592,69 @@ function mealTargetsFromDailyMacros(macros) {
   };
 }
 
-function createMainMeal(target, profile, random) {
-  const proteinSource = pickRandom(profile.proteins, random) || profile.proteins[0];
-  const carbSource = pickRandom(profile.carbs, random) || profile.carbs[0];
-  const fatSource = pickRandom(profile.fats, random) || profile.fats[0];
-  const veg = pickRandom(profile.vegetables, random) || "legumes";
-
-  const proteinGrams = computePortionGrams(
-    Math.max(12, target.p * 0.8),
-    proteinSource.p,
-    proteinSource.min,
-    proteinSource.max,
-    proteinSource.step || 5
-  );
-  const carbGrams = computePortionGrams(
-    Math.max(15, target.c * 0.9),
-    carbSource.c,
-    carbSource.min,
-    carbSource.max,
-    carbSource.step || 5
-  );
-  const fatGrams = computePortionGrams(
-    Math.max(4, target.f * 0.85),
-    fatSource.f,
-    fatSource.min,
-    fatSource.max,
-    fatSource.step || 1
-  );
-
-  const proteinMacros = computeItemMacros(proteinSource, proteinGrams);
-  const carbMacros = computeItemMacros(carbSource, carbGrams);
-  const fatMacros = computeItemMacros(fatSource, fatGrams);
-  const total = {
-    p: proteinMacros.p + carbMacros.p + fatMacros.p,
-    c: proteinMacros.c + carbMacros.c + fatMacros.c,
-    f: proteinMacros.f + carbMacros.f + fatMacros.f
-  };
-
-  const gapProtein = target.p - total.p;
-  let proteinTopUpText = "";
-  if (gapProtein > 6) {
-    const topUpSource = profile.breakfastProteins[0] || proteinSource;
-    const topUpGrams = computePortionGrams(
-      gapProtein,
-      topUpSource.p,
-      50,
-      200,
-      5
-    );
-    proteinTopUpText = ` + ${formatIngredient(topUpSource, topUpGrams)}`;
+function resolveSource(profile, poolName, preferredName, random) {
+  const pool = Array.isArray(profile?.[poolName]) ? profile[poolName] : [];
+  if (preferredName) {
+    const exact = pool.find((item) => item?.name === preferredName);
+    if (exact) return exact;
   }
-
-  return `Assiette: ${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)} + ${veg} 250 g + ${formatIngredient(fatSource, fatGrams)}${proteinTopUpText}`;
+  return pickRandom(pool, random) || pool[0] || null;
 }
 
-function createBreakfast(target, profile, random) {
-  const proteinSource = pickRandom(profile.breakfastProteins, random) || profile.proteins[0];
-  const isEggBreakfast = /oeufs|brouille/i.test(proteinSource?.name || "");
-  const carbPool = isEggBreakfast
-    ? profile.carbs.filter((item) => /pain|pommes de terre/i.test(item.name))
-    : profile.carbs.filter((item) => !/riz|pates/i.test(item.name));
-  const carbSource = pickRandom(carbPool, random) || pickRandom(profile.carbs, random) || profile.carbs[0];
-  const fatSource = pickRandom(profile.fats, random) || profile.fats[0];
+function gramsForItem(targetMacro, item, minFallback = 60, maxFallback = 300, stepFallback = 5) {
+  if (!item) return 0;
+  return computePortionGrams(
+    targetMacro,
+    item.p || item.c || item.f || 0,
+    item.min || minFallback,
+    item.max || maxFallback,
+    item.step || stepFallback
+  );
+}
+
+function createMainMeal(target, profile, random, modeKey) {
+  const template = pickRandom(MENU_MEAL_TEMPLATES[modeKey]?.main || [], random) || {};
+  const proteinSource = resolveSource(profile, "proteins", template.protein, random);
+  const carbSource = resolveSource(profile, "carbs", template.carb, random);
+  const fatSource = resolveSource(profile, "fats", template.fat, random);
+  const veg = template.veg || pickRandom(profile.vegetables, random) || "legumes cuits";
+
+  const proteinGrams = gramsForItem(Math.max(14, target.p * 0.78), proteinSource, 90, 280, 5);
+  const carbGrams = gramsForItem(Math.max(18, target.c * 0.88), carbSource, 90, 480, 5);
+  const fatGrams = gramsForItem(Math.max(4, target.f * 0.82), fatSource, 5, 30, 1);
+
+  return `Assiette: ${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)} + ${veg} 250 g + ${formatIngredient(fatSource, fatGrams)}`;
+}
+
+function createBreakfast(target, profile, random, modeKey) {
+  const template = pickRandom(MENU_MEAL_TEMPLATES[modeKey]?.breakfast || [], random) || {};
+  const proteinPool = template.proteinPool || "breakfastProteins";
+  const proteinSource = resolveSource(profile, proteinPool, template.protein, random);
+  const carbSource = resolveSource(profile, "carbs", template.carb, random);
+  const fatSource = template.fat ? resolveSource(profile, "fats", template.fat, random) : null;
   const fruit = pickRandom(profile.fruits, random) || "fruit";
 
-  const proteinGrams = computePortionGrams(
-    Math.max(12, target.p * 0.8),
-    proteinSource.p,
-    proteinSource.min,
-    proteinSource.max,
-    proteinSource.step || 5
-  );
-  const carbGrams = computePortionGrams(
-    Math.max(18, target.c * 0.8),
-    carbSource.c,
-    carbSource.min,
-    carbSource.max,
-    carbSource.step || 5
-  );
-  const fatText = (() => {
-    if (isEggBreakfast) return "";
-    const fatGrams = computePortionGrams(
-      Math.max(3, target.f * 0.6),
-      fatSource.f,
-      fatSource.min,
-      fatSource.max,
-      fatSource.step || 1
-    );
-    return ` + ${formatIngredient(fatSource, fatGrams)}`;
-  })();
+  const proteinGrams = gramsForItem(Math.max(12, target.p * 0.8), proteinSource, 120, 420, 5);
+  const carbGrams = gramsForItem(Math.max(18, target.c * 0.78), carbSource, 35, 160, 5);
+  const fatText = fatSource
+    ? ` + ${formatIngredient(fatSource, gramsForItem(Math.max(3, target.f * 0.55), fatSource, 8, 30, 1))}`
+    : "";
 
   return `Petit-dejeuner: ${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)}${fatText} + ${fruit}`;
 }
 
-function createSnack(target, profile, random) {
-  const proteinSource = pickRandom(profile.breakfastProteins, random) || profile.proteins[0];
-  const fatSource = pickRandom(profile.fats, random) || profile.fats[0];
+function createSnack(target, profile, random, modeKey) {
+  const template = pickRandom(MENU_MEAL_TEMPLATES[modeKey]?.snack || [], random) || {};
+  const proteinPool = template.proteinPool || "breakfastProteins";
+  const proteinSource =
+    resolveSource(profile, proteinPool, template.protein, random) ||
+    resolveSource(profile, "proteins", template.protein, random);
+  const fatSource = template.fat ? resolveSource(profile, "fats", template.fat, random) : resolveSource(profile, "fats", "", random);
   const fruit = pickRandom(profile.fruits, random) || "fruit";
-  const proteinGrams = computePortionGrams(
-    Math.max(10, target.p * 0.9),
-    proteinSource.p,
-    proteinSource.min,
-    proteinSource.max,
-    proteinSource.step || 5
-  );
-  const fatGrams = computePortionGrams(
-    Math.max(3, target.f * 0.85),
-    fatSource.f,
-    fatSource.min,
-    fatSource.max,
-    fatSource.step || 1
-  );
+
+  const proteinGrams = gramsForItem(Math.max(10, target.p * 0.9), proteinSource, 100, 350, 5);
+  const fatGrams = gramsForItem(Math.max(3, target.f * 0.85), fatSource, 8, 30, 1);
+
   return `Collation: ${formatIngredient(proteinSource, proteinGrams)} + ${fruit} + ${formatIngredient(fatSource, fatGrams)}`;
 }
 
@@ -588,10 +674,10 @@ function generateMenuProposal({ clientId, weekStart, mode, variant, macros, calo
 
   for (const day of DAY_KEYS) {
     plan[day.key] = {
-      breakfast: createBreakfast(dailyTargets.breakfast, profile, random),
-      lunch: createMainMeal(dailyTargets.lunch, profile, random),
-      dinner: createMainMeal(dailyTargets.dinner, profile, random),
-      snack: createSnack(dailyTargets.snack, profile, random)
+      breakfast: createBreakfast(dailyTargets.breakfast, profile, random, normalizedMode),
+      lunch: createMainMeal(dailyTargets.lunch, profile, random, normalizedMode),
+      dinner: createMainMeal(dailyTargets.dinner, profile, random, normalizedMode),
+      snack: createSnack(dailyTargets.snack, profile, random, normalizedMode)
     };
   }
 
@@ -638,6 +724,8 @@ export default function DashboardCoach({
   const [bmrMethodByClientId, setBmrMethodByClientId] = useState({});
   const [reportDraftByClientId, setReportDraftByClientId] = useState({});
   const [menuDraftByClientId, setMenuDraftByClientId] = useState({});
+  const [menuCsvTextByClientId, setMenuCsvTextByClientId] = useState({});
+  const [menuCsvStatusByClientId, setMenuCsvStatusByClientId] = useState({});
   const [menuGeneratorModeByClientId, setMenuGeneratorModeByClientId] = useState({});
   const [menuGeneratorVariantByClientId, setMenuGeneratorVariantByClientId] = useState({});
   const [appointmentDraftByClientId, setAppointmentDraftByClientId] = useState({});
@@ -1138,6 +1226,25 @@ export default function DashboardCoach({
     const nextVariant = (menuGeneratorVariantByClientId[client.id] || 0) + 1;
     setMenuGeneratorVariantByClientId((prev) => ({ ...prev, [client.id]: nextVariant }));
     applyGeneratedMenu(client, nextVariant);
+  };
+
+  const importMenuCsvForClient = (client) => {
+    const raw = menuCsvTextByClientId[client.id] || "";
+    const parsed = parseMenuCsvToWeeklyPlan(raw);
+    if (!parsed.ok) {
+      setMenuCsvStatusByClientId((prev) => ({ ...prev, [client.id]: parsed.error }));
+      return;
+    }
+    const weekStart = menuDraftByClientId[client.id]?.weekStart || getMondayOfCurrentWeek();
+    setMenuDraft(client.id, (draft) => ({
+      ...draft,
+      weekStart,
+      plan: parsed.plan
+    }));
+    setMenuCsvStatusByClientId((prev) => ({
+      ...prev,
+      [client.id]: `${parsed.filled} repas importes depuis le CSV.`
+    }));
   };
 
   const saveWeeklyMenuForClient = async (client) => {
@@ -1720,6 +1827,34 @@ export default function DashboardCoach({
               </div>
               {saveFeedbackByClientId[`${selectedClient.id}:menuGen`] ? (
                 <p className="info-text">{saveFeedbackByClientId[`${selectedClient.id}:menuGen`]}</p>
+              ) : null}
+
+              <label>
+                Coller CSV menu (format: day,breakfast,lunch,dinner,snack)
+                <textarea
+                  value={menuCsvTextByClientId[selectedClient.id] || ""}
+                  onChange={(event) =>
+                    setMenuCsvTextByClientId((prev) => ({
+                      ...prev,
+                      [selectedClient.id]: event.target.value
+                    }))
+                  }
+                  placeholder={"day,breakfast,lunch,dinner,snack\nmonday,Skyr + avoine,Riz + poulet,Saumon + legumes,Fruit + noix"}
+                  disabled={busy}
+                />
+              </label>
+              <div className="row-actions">
+                <button
+                  className="ghost"
+                  type="button"
+                  disabled={busy || !String(menuCsvTextByClientId[selectedClient.id] || "").trim()}
+                  onClick={() => importMenuCsvForClient(selectedClient)}
+                >
+                  Importer CSV dans ce menu
+                </button>
+              </div>
+              {menuCsvStatusByClientId[selectedClient.id] ? (
+                <p className="info-text">{menuCsvStatusByClientId[selectedClient.id]}</p>
               ) : null}
 
               <div className="menu-days-stack">
