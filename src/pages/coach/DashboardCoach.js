@@ -253,8 +253,7 @@ const MENU_MODE_PROFILES = {
       { name: "lentilles cuites", p: 9, c: 20, f: 0.4, min: 120, max: 380 }
     ],
     breakfastProteins: [
-      { name: "fromage blanc 0%", p: 8, c: 4, f: 0.2, min: 120, max: 420 },
-      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 240 }
+      { name: "fromage blanc 0%", p: 8, c: 4, f: 0.2, min: 120, max: 420 }
     ],
     carbs: [
       { name: "riz cuit", p: 2.7, c: 28, f: 0.3, min: 90, max: 420 },
@@ -267,7 +266,7 @@ const MENU_MODE_PROFILES = {
       { name: "cacahuetes", p: 26, c: 16, f: 49, min: 8, max: 35, step: 1 }
     ],
     fruits: ["banane", "pomme", "poire", "orange"],
-    vegetables: ["legumes surgeles melanges", "brocoli", "haricots verts", "courgettes"]
+    vegetables: ["poelee de legumes surgeles", "brocoli vapeur", "haricots verts", "ratatouille maison"]
   },
   vegetarien: {
     proteins: [
@@ -278,8 +277,7 @@ const MENU_MODE_PROFILES = {
     ],
     breakfastProteins: [
       { name: "skyr nature", p: 11, c: 3.5, f: 0.2, min: 160, max: 420 },
-      { name: "fromage blanc 0%", p: 8, c: 4, f: 0.2, min: 140, max: 420 },
-      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 260 }
+      { name: "fromage blanc 0%", p: 8, c: 4, f: 0.2, min: 140, max: 420 }
     ],
     carbs: [
       { name: "riz cuit", p: 2.7, c: 28, f: 0.3, min: 90, max: 420 },
@@ -292,7 +290,7 @@ const MENU_MODE_PROFILES = {
       { name: "amandes", p: 21.1, c: 9.1, f: 49.9, min: 8, max: 35, step: 1 }
     ],
     fruits: ["banane", "pomme", "kiwi", "fruits rouges"],
-    vegetables: ["brocoli", "courgettes", "carottes", "haricots verts"]
+    vegetables: ["brocoli vapeur", "courgettes poelees", "carottes vapeur", "haricots verts"]
   },
   vegan: {
     proteins: [
@@ -317,7 +315,7 @@ const MENU_MODE_PROFILES = {
       { name: "amandes", p: 21.1, c: 9.1, f: 49.9, min: 8, max: 32, step: 1 }
     ],
     fruits: ["banane", "pomme", "poire", "mangue"],
-    vegetables: ["brocoli", "epinards", "courgettes", "poivrons"]
+    vegetables: ["brocoli vapeur", "epinards poeles", "courgettes poelees", "poelee poivrons oignons"]
   },
   mediterraneen: {
     proteins: [
@@ -327,8 +325,7 @@ const MENU_MODE_PROFILES = {
       { name: "pois chiches cuits", p: 8.9, c: 27.4, f: 2.6, min: 120, max: 360 }
     ],
     breakfastProteins: [
-      { name: "skyr nature", p: 11, c: 3.5, f: 0.2, min: 140, max: 420 },
-      { name: "oeufs entiers", p: 13, c: 1.1, f: 11, min: 120, max: 240 }
+      { name: "skyr nature", p: 11, c: 3.5, f: 0.2, min: 140, max: 420 }
     ],
     carbs: [
       { name: "quinoa cuit", p: 4.4, c: 21, f: 1.9, min: 100, max: 420 },
@@ -342,7 +339,7 @@ const MENU_MODE_PROFILES = {
       { name: "avocat", p: 2, c: 8.5, f: 14.7, min: 40, max: 160, step: 5 }
     ],
     fruits: ["orange", "pomme", "kiwi", "fruits rouges"],
-    vegetables: ["tomates", "courgettes", "aubergines", "haricots verts"]
+    vegetables: ["ratatouille", "legumes grilles", "salade concombre tomate", "haricots verts"]
   },
   rapide: {
     proteins: [
@@ -366,7 +363,7 @@ const MENU_MODE_PROFILES = {
       { name: "beurre de cacahuete", p: 25, c: 20, f: 50, min: 8, max: 30, step: 1 }
     ],
     fruits: ["banane", "pomme", "orange", "poire"],
-    vegetables: ["salade composee", "legumes surgeles", "tomates", "concombre"]
+    vegetables: ["salade composee", "poelee de legumes surgeles", "courgettes poelees", "wok de legumes"]
   }
 };
 
@@ -512,12 +509,16 @@ function createMainMeal(target, profile, random) {
     proteinTopUpText = ` + ${formatIngredient(topUpSource, topUpGrams)}`;
   }
 
-  return `${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)} + ${veg} 250 g + ${formatIngredient(fatSource, fatGrams)}${proteinTopUpText}`;
+  return `Assiette: ${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)} + ${veg} 250 g + ${formatIngredient(fatSource, fatGrams)}${proteinTopUpText}`;
 }
 
 function createBreakfast(target, profile, random) {
   const proteinSource = pickRandom(profile.breakfastProteins, random) || profile.proteins[0];
-  const carbSource = pickRandom(profile.carbs, random) || profile.carbs[0];
+  const isEggBreakfast = /oeufs|brouille/i.test(proteinSource?.name || "");
+  const carbPool = isEggBreakfast
+    ? profile.carbs.filter((item) => /pain|pommes de terre/i.test(item.name))
+    : profile.carbs.filter((item) => !/riz|pates/i.test(item.name));
+  const carbSource = pickRandom(carbPool, random) || pickRandom(profile.carbs, random) || profile.carbs[0];
   const fatSource = pickRandom(profile.fats, random) || profile.fats[0];
   const fruit = pickRandom(profile.fruits, random) || "fruit";
 
@@ -535,15 +536,19 @@ function createBreakfast(target, profile, random) {
     carbSource.max,
     carbSource.step || 5
   );
-  const fatGrams = computePortionGrams(
-    Math.max(3, target.f * 0.6),
-    fatSource.f,
-    fatSource.min,
-    fatSource.max,
-    fatSource.step || 1
-  );
+  const fatText = (() => {
+    if (isEggBreakfast) return "";
+    const fatGrams = computePortionGrams(
+      Math.max(3, target.f * 0.6),
+      fatSource.f,
+      fatSource.min,
+      fatSource.max,
+      fatSource.step || 1
+    );
+    return ` + ${formatIngredient(fatSource, fatGrams)}`;
+  })();
 
-  return `${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)} + ${formatIngredient(fatSource, fatGrams)} + ${fruit}`;
+  return `Petit-dejeuner: ${formatIngredient(proteinSource, proteinGrams)} + ${formatIngredient(carbSource, carbGrams)}${fatText} + ${fruit}`;
 }
 
 function createSnack(target, profile, random) {
@@ -564,7 +569,7 @@ function createSnack(target, profile, random) {
     fatSource.max,
     fatSource.step || 1
   );
-  return `${formatIngredient(proteinSource, proteinGrams)} + ${fruit} + ${formatIngredient(fatSource, fatGrams)}`;
+  return `Collation: ${formatIngredient(proteinSource, proteinGrams)} + ${fruit} + ${formatIngredient(fatSource, fatGrams)}`;
 }
 
 function generateMenuProposal({ clientId, weekStart, mode, variant, macros, calories }) {
